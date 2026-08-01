@@ -1,0 +1,469 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		B00000000000000000000001 /* ROBControllerVisionApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000001 /* ROBControllerVisionApp.swift */; };
+		B00000000000000000000002 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000002 /* ContentView.swift */; };
+		B00000000000000000000003 /* RobotViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000003 /* RobotViewModel.swift */; };
+		B00000000000000000000004 /* GameControllerInput.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000004 /* GameControllerInput.swift */; };
+		B00000000000000000000005 /* ConnectionStatusView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000005 /* ConnectionStatusView.swift */; };
+		B00000000000000000000006 /* ControlPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000006 /* ControlPanel.swift */; };
+		B00000000000000000000007 /* TelemetryPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000007 /* TelemetryPanel.swift */; };
+		B00000000000000000000008 /* VideoPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000008 /* VideoPanel.swift */; };
+		B00000000000000000000009 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000009 /* Assets.xcassets */; };
+		B0000000000000000000000A /* ROBControlCore in Frameworks */ = {isa = PBXBuildFile; productRef = P00000000000000000000002 /* ROBControlCore */; };
+		B0000000000000000000000B /* SampleBufferVideoView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0000000000000000000000C /* SampleBufferVideoView.swift */; };
+		B0000000000000000000000C /* VideoPipelineCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0000000000000000000000D /* VideoPipelineCoordinator.swift */; };
+		B0000000000000000000000D /* ROBVideoPipeline in Frameworks */ = {isa = PBXBuildFile; productRef = P00000000000000000000003 /* ROBVideoPipeline */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		F00000000000000000000001 /* ROBControllerVisionApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ROBControllerVisionApp.swift; sourceTree = "<group>"; };
+		F00000000000000000000002 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		F00000000000000000000003 /* RobotViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RobotViewModel.swift; sourceTree = "<group>"; };
+		F00000000000000000000004 /* GameControllerInput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameControllerInput.swift; sourceTree = "<group>"; };
+		F00000000000000000000005 /* ConnectionStatusView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionStatusView.swift; sourceTree = "<group>"; };
+		F00000000000000000000006 /* ControlPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlPanel.swift; sourceTree = "<group>"; };
+		F00000000000000000000007 /* TelemetryPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelemetryPanel.swift; sourceTree = "<group>"; };
+		F00000000000000000000008 /* VideoPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoPanel.swift; sourceTree = "<group>"; };
+		F00000000000000000000009 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		F0000000000000000000000A /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		F0000000000000000000000B /* ROBControllerVision.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ROBControllerVision.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		F0000000000000000000000C /* SampleBufferVideoView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SampleBufferVideoView.swift; sourceTree = "<group>"; };
+		F0000000000000000000000D /* VideoPipelineCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoPipelineCoordinator.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		A00000000000000000000011 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B0000000000000000000000A /* ROBControlCore in Frameworks */,
+				B0000000000000000000000D /* ROBVideoPipeline in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		A00000000000000000000004 = {
+			isa = PBXGroup;
+			children = (
+				A00000000000000000000006 /* ROBControllerVision */,
+				A00000000000000000000005 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		A00000000000000000000005 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				F0000000000000000000000B /* ROBControllerVision.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		A00000000000000000000006 /* ROBControllerVision */ = {
+			isa = PBXGroup;
+			children = (
+				A00000000000000000000007 /* App */,
+				A00000000000000000000008 /* Features */,
+				A0000000000000000000000D /* Platform */,
+				A0000000000000000000000F /* Resources */,
+			);
+			path = ROBControllerVision;
+			sourceTree = "<group>";
+		};
+		A00000000000000000000007 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				F00000000000000000000001 /* ROBControllerVisionApp.swift */,
+				F00000000000000000000002 /* ContentView.swift */,
+				F00000000000000000000003 /* RobotViewModel.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		A00000000000000000000008 /* Features */ = {
+			isa = PBXGroup;
+			children = (
+				A00000000000000000000009 /* Connection */,
+				A0000000000000000000000A /* Control */,
+				A0000000000000000000000B /* Telemetry */,
+				A0000000000000000000000C /* Video */,
+			);
+			path = Features;
+			sourceTree = "<group>";
+		};
+		A00000000000000000000009 /* Connection */ = {
+			isa = PBXGroup;
+			children = (
+				F00000000000000000000005 /* ConnectionStatusView.swift */,
+			);
+			path = Connection;
+			sourceTree = "<group>";
+		};
+		A0000000000000000000000A /* Control */ = {
+			isa = PBXGroup;
+			children = (
+				F00000000000000000000006 /* ControlPanel.swift */,
+			);
+			path = Control;
+			sourceTree = "<group>";
+		};
+		A0000000000000000000000B /* Telemetry */ = {
+			isa = PBXGroup;
+			children = (
+				F00000000000000000000007 /* TelemetryPanel.swift */,
+			);
+			path = Telemetry;
+			sourceTree = "<group>";
+		};
+		A0000000000000000000000C /* Video */ = {
+			isa = PBXGroup;
+			children = (
+				F00000000000000000000008 /* VideoPanel.swift */,
+			);
+			path = Video;
+			sourceTree = "<group>";
+		};
+		A0000000000000000000000D /* Platform */ = {
+			isa = PBXGroup;
+			children = (
+				A0000000000000000000000E /* GameController */,
+				A00000000000000000000013 /* Video */,
+			);
+			path = Platform;
+			sourceTree = "<group>";
+		};
+		A0000000000000000000000E /* GameController */ = {
+			isa = PBXGroup;
+			children = (
+				F00000000000000000000004 /* GameControllerInput.swift */,
+			);
+			path = GameController;
+			sourceTree = "<group>";
+		};
+		A00000000000000000000013 /* Video */ = {
+			isa = PBXGroup;
+			children = (
+				F0000000000000000000000C /* SampleBufferVideoView.swift */,
+				F0000000000000000000000D /* VideoPipelineCoordinator.swift */,
+			);
+			path = Video;
+			sourceTree = "<group>";
+		};
+		A0000000000000000000000F /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				F00000000000000000000009 /* Assets.xcassets */,
+				F0000000000000000000000A /* Info.plist */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		A00000000000000000000002 /* ROBControllerVision */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = C00000000000000000000002 /* Build configuration list for PBXNativeTarget "ROBControllerVision" */;
+			buildPhases = (
+				A00000000000000000000010 /* Sources */,
+				A00000000000000000000011 /* Frameworks */,
+				A00000000000000000000012 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = ROBControllerVision;
+			packageProductDependencies = (
+				P00000000000000000000002 /* ROBControlCore */,
+				P00000000000000000000003 /* ROBVideoPipeline */,
+			);
+			productName = ROBControllerVision;
+			productReference = F0000000000000000000000B /* ROBControllerVision.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		A00000000000000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2660;
+				LastUpgradeCheck = 2660;
+				TargetAttributes = {
+					A00000000000000000000002 = {
+						CreatedOnToolsVersion = 26.0;
+					};
+				};
+			};
+			buildConfigurationList = C00000000000000000000001 /* Build configuration list for PBXProject "ROBControllerVision" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = A00000000000000000000004;
+			packageReferences = (
+				P00000000000000000000001 /* ROBControlCore */,
+			);
+			productRefGroup = A00000000000000000000005 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				A00000000000000000000002 /* ROBControllerVision */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		A00000000000000000000012 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B00000000000000000000009 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		A00000000000000000000010 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B00000000000000000000001 /* ROBControllerVisionApp.swift in Sources */,
+				B00000000000000000000002 /* ContentView.swift in Sources */,
+				B00000000000000000000003 /* RobotViewModel.swift in Sources */,
+				B00000000000000000000004 /* GameControllerInput.swift in Sources */,
+				B00000000000000000000005 /* ConnectionStatusView.swift in Sources */,
+				B00000000000000000000006 /* ControlPanel.swift in Sources */,
+				B00000000000000000000007 /* TelemetryPanel.swift in Sources */,
+				B00000000000000000000008 /* VideoPanel.swift in Sources */,
+				B0000000000000000000000B /* SampleBufferVideoView.swift in Sources */,
+				B0000000000000000000000C /* VideoPipelineCoordinator.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		D00000000000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		D00000000000000000000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SWIFT_COMPILATION_MODE = wholemodule;
+			};
+			name = Release;
+		};
+		E00000000000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_PREVIEWS = YES;
+				INFOPLIST_FILE = ROBControllerVision/Resources/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.raramayo.ROBControllerVision;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = xros;
+				SUPPORTED_PLATFORMS = "xros xrsimulator";
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = 7;
+				XROS_DEPLOYMENT_TARGET = 2.0;
+			};
+			name = Debug;
+		};
+		E00000000000000000000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_PREVIEWS = YES;
+				INFOPLIST_FILE = ROBControllerVision/Resources/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.raramayo.ROBControllerVision;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = xros;
+				SUPPORTED_PLATFORMS = "xros xrsimulator";
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = 7;
+				XROS_DEPLOYMENT_TARGET = 2.0;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		C00000000000000000000001 /* Build configuration list for PBXProject "ROBControllerVision" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				D00000000000000000000001 /* Debug */,
+				D00000000000000000000002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		C00000000000000000000002 /* Build configuration list for PBXNativeTarget "ROBControllerVision" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E00000000000000000000001 /* Debug */,
+				E00000000000000000000002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		P00000000000000000000001 /* ROBControlCore */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/ROBControlCore;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		P00000000000000000000002 /* ROBControlCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = P00000000000000000000001 /* ROBControlCore */;
+			productName = ROBControlCore;
+		};
+		P00000000000000000000003 /* ROBVideoPipeline */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = P00000000000000000000001 /* ROBControlCore */;
+			productName = ROBVideoPipeline;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = A00000000000000000000001 /* Project object */;
+}
