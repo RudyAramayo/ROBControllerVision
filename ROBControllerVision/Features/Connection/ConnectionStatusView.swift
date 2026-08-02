@@ -25,36 +25,65 @@ struct ConnectionStatusView: View {
     }
 
     var body: some View {
-        HStack(spacing: 14) {
-            Image(systemName: "circle.fill")
-                .font(.caption)
-                .foregroundStyle(phaseColor)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(connectionTitle)
-                    .font(.headline)
-                Text(model.statusMessage)
+        VStack(spacing: 12) {
+            HStack(spacing: 14) {
+                Image(systemName: "circle.fill")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                    .foregroundStyle(phaseColor)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(connectionTitle)
+                        .font(.headline)
+                    Text(model.statusMessage)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+
+                Spacer()
+
+                if let service = model.snapshot.connection.endpoint?.serviceType {
+                    Text(service)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                }
             }
 
-            Spacer()
+            Divider()
 
-            if let service = model.snapshot.connection.endpoint?.serviceType {
-                Text(service)
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
+            HStack(spacing: 12) {
+                Picker("Endpoint", selection: $model.connectionDestination) {
+                    ForEach(RobotConnectionDestination.allCases) { destination in
+                        Text(destination.label).tag(destination)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(maxWidth: 360)
+                .disabled(!model.canChangeConnectionDestination)
+
+                Button {
+                    model.showsPairingSheet = true
+                } label: {
+                    Label(
+                        model.hasInstalledCerebroCredential ? "Credential" : "Pair Cerebro",
+                        systemImage: model.cerebroCredentialIsVerified
+                            ? "checkmark.shield"
+                            : "key"
+                    )
+                }
+                .buttonStyle(.bordered)
+
+                Spacer()
+
+                Button(model.connectionButtonTitle, action: model.toggleConnection)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!model.canToggleConnection)
             }
-
-            Button(
-                model.snapshot.connection.phase == .connected ? "Disconnect" : "Connect Simulator",
-                action: model.toggleConnection
-            )
-            .buttonStyle(.borderedProminent)
-            .disabled(model.snapshot.connection.phase == .disconnecting)
         }
         .padding(18)
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 20))
+        .sheet(isPresented: $model.showsPairingSheet) {
+            CerebroPairingSheet(model: model)
+        }
     }
 }

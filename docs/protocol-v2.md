@@ -1,22 +1,47 @@
-# ROB control protocol v2 scaffold
+# ROB control domain and Cerebro v2 mapping
 
-The types in `ROBControlCore` define the domain-level v2 contract. They are not yet a complete network transport. QUIC framing, authentication, and encoded-video fragmentation remain transport work.
+`ROBControlCore` defines the controller's transport-independent domain contract. `ROBCerebroTransport` now supplies the production mapping to Cerebro's authenticated `robctl/2` and `robvideo/1` services. The simulator implements the same domain protocols without a network.
+
+These layers are intentionally distinct:
+
+```text
+RobotCommandEnvelope / VideoControlMessage       ROBControlCore domain
+                    │
+                    ├── simulator actor + in-memory H.264 channel
+                    └── CerebroRobotTransport
+                           ├── RCTL v2 control framing + established controller payload
+                           └── RVID v1 video framing + RBVD binary media
+```
+
+The JSON examples below specify domain semantics and fixture encoding. They are not sent verbatim as Cerebro application payloads.
+
+## Pairing and transport authentication
+
+Cerebro issues one `ROBCTL2:...` enrollment code for one physical controller. ROBControllerVision accepts only an `operatorController` profile and stores the exact robot UUID, controller UUID, certificate SHA-256 pin, secret, role, and metadata in one Keychain record. Installing a new valid profile updates that record; the app has no API that creates a Cerebro server identity or certificate. The UI distinguishes persisted from authenticated state: **Credential installed** means Keychain storage succeeded, while **Connected and verified** appears only after the control certificate and reciprocal proof succeed.
+
+Control discovery browses `_robctl._udp`, then filters for the installed `robot_id`, `ver=2`, and `alpn=robctl/2`. Bonjour metadata is routing information only. The client pins the enrolled leaf certificate, establishes TLS 1.3 QUIC, and completes reciprocal HMAC-SHA-256 challenge/proof before sending application data.
+
+Video independently browses `_robvideo._udp` and uses ALPN `robvideo/1`, the same certificate pin, and a video-domain reciprocal proof. A control proof is not valid on the video service. Failure to discover or authenticate this optional connection yields no camera capabilities; it does not fail an authenticated `robctl/2` session.
+
+Every controller needs a unique enrollment code. Copying a ROBController credential to Vision Pro clones the same authenticated controller UUID and can trigger duplicate-session rejection. If Cerebro's one-time canonical-certificate migration changed the leaf pin, revoke the stale device record and install a fresh Cerebro-issued code; never disable pin validation or automatically trust a replacement certificate.
 
 ## Session handshake
 
-A successful handshake establishes:
+A successful core handshake establishes:
 
 - protocol version;
-- a fresh, unpredictable session ID;
+- Cerebro's fresh, unpredictable live control-session UUID;
 - robot identity;
-- camera and control capabilities; and
+- control capabilities and any cameras obtained from the optional video service; and
 - authoritative robot-side safety state.
 
-Every command carries the negotiated session ID and a monotonically increasing sequence. A receiver must reject commands from an old session before interpreting their payload.
+For the simulator, the endpoint creates that UUID. For Cerebro, `CerebroRobotTransport` must use the 16 session bytes from the authenticated `robctl/2` challenge exactly. It must not synthesize a second production session ID.
 
-## Control envelope
+Every domain command carries the negotiated session ID and a monotonically increasing sequence. A receiver rejects commands from an old session before interpreting their payload. The same exact UUID is included in production video subscribe, feedback, unsubscribe, and media identities so Cerebro can bind the independent video connection to the current operator control session.
 
-The JSON form uses an explicit command discriminator and Unix epoch milliseconds:
+## Domain control envelope
+
+The domain JSON form uses an explicit command discriminator and Unix epoch milliseconds:
 
 ```json
 {
@@ -36,23 +61,25 @@ The JSON form uses an explicit command discriminator and Unix epoch milliseconds
 }
 ```
 
-`linear` and `angular` are normalized to `-1...1`. Non-finite decoded values fail closed to zero. The robot converts normalized values into its own configured physical limits.
+`linear` and `angular` are normalized to `-1...1`. Non-finite decoded values fail closed to zero. The robot converts normalized values into its configured physical limits.
 
-The receive-side processing order must be:
+For production, `CerebroRobotTransport` validates the domain envelope and translates motion-authority and controller-snapshot operations into Cerebro's established ROBController application payload. That compatibility payload is carried inside authenticated, ordered `RCTL` v2 QUIC frames. Historical keyed dictionaries and the fourteen-line controller snapshot remain private to `ROBCerebroTransport`; they are not the `ROBControlCore` schema and must not be used by new UI or safety code.
 
-1. authenticate the peer and transport;
-2. enforce a strict maximum envelope size;
-3. decode the schema and protocol version;
-4. validate session ID;
-5. validate sequence and lease;
+Receive-side processing follows this order:
+
+1. authenticate the peer and physical transport;
+2. enforce the physical frame-size limit;
+3. decode the frame/schema and protocol version;
+4. validate authenticated role and message kind;
+5. validate the current session and command sequence/lease;
 6. validate every payload value; and
 7. apply the command.
 
-Emergency stop is idempotent and latched. Reset is a distinct command, leaves motion disarmed, and must never be inferred from reconnecting.
+Emergency stop is idempotent and latched. Reset is distinct, leaves motion disarmed, and must never be inferred from reconnecting. Cerebro's receive-side watchdog remains definitive when a real transport disappears.
 
 ## Video negotiation
 
-`VideoControlMessage` is carried on the reliable control plane:
+`VideoControlMessage` models these operations at the `RobotSession` boundary:
 
 ```text
 subscribe(request ID, camera, codecs, constraints, delivery)
@@ -63,9 +90,20 @@ feedback(stream ID, loss, jitter, decoder FPS, desired bitrate, keyframe request
 unsubscribe(stream ID)
 ```
 
-The request ID correlates the asynchronous response. `RobotSession` applies a two-second negotiation timeout, rejects duplicate active or pending IDs, and does not report success until it receives the matching response. A cancelled or timed-out request is marked abandoned so any late acceptance is immediately unsubscribed. An injected video source narrows advertised camera codecs, rejects unsupported delivery modes during subscription negotiation, and caps the accepted descriptor at its maximum bitrate.
+The physical routing depends on the endpoint:
 
-Encoded video data is intentionally absent from control messages. The separate data plane models two explicitly tagged messages:
+- The simulator handles negotiation in its actor and opens `BoundedInMemoryVideoChannel`.
+- `CerebroRobotTransport` sends capabilities, subscribe/response, feedback, unsubscribe, and stream-ended control messages on the authenticated `_robvideo._udp` connection.
+
+Production video negotiation does **not** use the `_robctl._udp` connection. The phrase "control message" here means a low-rate video-domain operation, not the physical robot-control channel.
+
+The request ID correlates the asynchronous response. `RobotSession` applies a bounded negotiation timeout, rejects duplicate active or pending IDs, and does not report success until it receives the matching response. A cancelled or timed-out request is abandoned so a late acceptance is immediately unsubscribed.
+
+Cerebro currently advertises camera `front`, H.264, and `reliableStream`. ROBControllerVision requests up to 960 x 540, 20 fps, and 1,500,000 bit/s; the accepted `VideoStreamDescriptor` is authoritative because the server may clamp the request. QUIC datagram, HEVC, and JPEG requests are rejected for this production profile.
+
+## Encoded video data
+
+The video data plane maps two explicitly tagged domain messages:
 
 ```text
 codecConfiguration(session, stream, codec, generation, SPS/PPS, NAL length size)
@@ -73,12 +111,25 @@ accessUnit(session, stream, codec, sequence, capture time, PTS, duration,
            keyframe flag, configuration generation, payload)
 ```
 
-H.264 payloads are complete AVCC length-prefixed access units, not individual NAL units and not Annex-B byte streams. Each opened channel has a unique token in addition to its session and subscription identities. Direct decoding drops harmless stale or reordered traffic, rejects malformed length prefixes and configuration conflicts, and suppresses predictive frames received after a sequence gap. SPS-derived coded and clean-aperture dimensions are checked against the negotiated descriptor before decoder allocation.
+On the Cerebro wire, each message is one bounded payload in a 32-byte ordered `RVID` frame. Media payloads begin with a fixed 92-byte network-byte-order `RBVD` header. Configuration carries raw SPS/PPS records; an access-unit message carries one complete AVCC length-prefixed H.264 access unit. It is not JSON/base64 and is never an Annex-B stream.
 
-Current hard limits are 2 MiB per access unit, 64 KiB per codec configuration, 3 MiB per serialized compatibility envelope, 4096 pixels per dimension, 8,847,360 decoded pixels, 240 frames per second, and 1 Gbit/s. `VideoDataMessageCodec` provides bounded JSON for tests and compatibility work; a production adapter should use binary framing rather than base64 JSON for media.
+The `RVID` Network.framework framer delivers complete reliable-stream application messages. Application-level datagram fragmentation and reassembly are not used in this version. The control and media connections remain separate so media congestion cannot delay a stop command.
 
-The transport below this model must fragment access units that exceed its packet size and must reassemble one complete validated access unit before decoding. Control commands and video fragments must never share a queue that allows media congestion to delay stop traffic.
+Each opened core channel has a unique ownership token in addition to its session and subscription identities. Direct decoding drops harmless stale or reordered traffic, rejects malformed length prefixes and configuration conflicts, and suppresses predictive frames after a sequence gap. SPS-derived coded and clean-aperture dimensions are checked against the negotiated descriptor before decoder allocation. Receiver loss requests cause feedback with `requestsKeyFrame = true` on `_robvideo._udp`.
 
-## Compatibility
+Current hard limits include:
 
-The future `LegacyAutoNetAdapter` should translate between these types and the existing robot wire representation. Legacy keyed archives, service-name inconsistencies, and native-endian framing must remain private implementation details of that adapter and must not become v2 protocol behavior.
+- 64 KiB for one video JSON control message or codec configuration;
+- 2 MiB for one encoded access unit;
+- 960 x 540, 20 fps, and 1,500,000 bit/s for the Cerebro profile; and
+- broader `ROBControlCore` defensive ceilings of 4096 pixels per dimension, 8,847,360 decoded pixels, 240 fps, and 1 Gbit/s before a transport-specific profile is applied.
+
+## Lifecycle and failure behavior
+
+The video subscription is valid only while its exact control session remains live for the same authenticated `operatorController`. A stale or locally generated UUID, `lidarPublisher` credential, revoked credential, mismatched stream ID, unsupported profile, malformed payload, or replaced control session fails closed.
+
+Scene suspension, disconnect, unsubscribe, stream-ended notification, or fatal receiver validation closes the uniquely owned media channel. Control disconnect tears down video. Video discovery/authentication failure produces a ready control handshake with no cameras, and runtime video loss ends its streams without closing, arming, resetting, or otherwise altering control. Capabilities are not hot-refreshed; restore video and reconnect the Cerebro endpoint to advertise cameras in a new handshake.
+
+## Compatibility boundary
+
+The production adapter deliberately contains Cerebro's established controller payload rather than changing the core model to match it. New protocol work should extend typed domain messages and add a narrow adapter mapping. It must not leak keyed archives, native implementation details, or service-name compatibility behavior into `ROBControlCore`.

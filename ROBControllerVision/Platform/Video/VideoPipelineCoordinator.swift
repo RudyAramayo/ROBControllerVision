@@ -14,7 +14,7 @@ enum VideoPipelineState: Equatable {
         switch self {
         case .idle: "Idle"
         case .starting: "Starting H.264 pipeline…"
-        case .streaming: "Live synthetic H.264"
+        case .streaming: "Live H.264"
         case .failed(let message): "Video failed: \(message)"
         }
     }

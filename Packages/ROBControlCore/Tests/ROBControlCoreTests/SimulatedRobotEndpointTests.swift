@@ -118,6 +118,27 @@ struct SimulatedRobotEndpointTests {
         await session.disconnect()
     }
 
+    @Test("A video-service failure leaves the control session connected")
+    func videoFailureDoesNotDisconnectControl() async throws {
+        let transport = FailingVideoTransport()
+        let session = RobotSession()
+        await session.connect(using: transport)
+
+        do {
+            _ = try await session.subscribeVideo(
+                VideoSubscriptionRequest(cameraID: CameraID(rawValue: "front"))
+            )
+            Issue.record("Expected the video service to reject the request")
+        } catch let error as FailingVideoTransport.Failure {
+            #expect(error == .unavailable)
+        }
+
+        let snapshot = await session.currentSnapshot()
+        #expect(snapshot.connection.isReady)
+        #expect(snapshot.videoStreams.isEmpty)
+        await session.disconnect()
+    }
+
     @Test("Video negotiation clamps the requested profile to camera capabilities")
     func videoNegotiation() async throws {
         let endpoint = makeEndpoint()
@@ -536,5 +557,59 @@ private actor DelayedVideoResponseTransport: RobotTransport {
 
     func didReceiveUnsubscribe(for id: VideoSubscriptionID) -> Bool {
         unsubscribedIDs.contains(id)
+    }
+}
+
+private actor FailingVideoTransport: RobotTransport {
+    enum Failure: Error, Equatable {
+        case unavailable
+    }
+
+    nonisolated let descriptor = RobotEndpointDescriptor(
+        name: "Control with unavailable video",
+        transport: .simulated
+    )
+
+    private let sessionID = UUID()
+    private var eventContinuation: AsyncStream<RobotEvent>.Continuation?
+
+    func events() -> AsyncStream<RobotEvent> {
+        let pair = AsyncStream<RobotEvent>.makeStream(bufferingPolicy: .bufferingNewest(8))
+        eventContinuation = pair.continuation
+        return pair.stream
+    }
+
+    func connect() -> RobotHandshake {
+        let handshake = RobotHandshake(
+            sessionID: sessionID,
+            robotName: descriptor.name,
+            capabilities: RobotCapabilities(
+                cameras: [
+                    CameraDescriptor(
+                        id: CameraID(rawValue: "front"),
+                        name: "Front Camera",
+                        supportedCodecs: [.h264],
+                        maximumWidth: 960,
+                        maximumHeight: 540,
+                        maximumFramesPerSecond: 20
+                    )
+                ]
+            )
+        )
+        eventContinuation?.yield(.connected(handshake))
+        return handshake
+    }
+
+    func disconnect() {
+        eventContinuation?.finish()
+        eventContinuation = nil
+    }
+
+    func send(_ envelope: RobotCommandEnvelope) throws {
+        guard envelope.sessionID == sessionID else { throw RobotTransportError.notConnected }
+        if case .video(.subscribe) = envelope.command {
+            throw Failure.unavailable
+        }
+        eventContinuation?.yield(.commandAcknowledged(envelope.id))
     }
 }

@@ -12,11 +12,16 @@ let package = Package(
     products: [
         .library(name: "ROBControlCore", targets: ["ROBControlCore"]),
         .library(name: "ROBVideoPipeline", targets: ["ROBVideoPipeline"]),
+        .library(name: "ROBCerebroTransport", targets: ["ROBCerebroTransport"]),
     ],
     targets: [
         .target(name: "ROBControlCore"),
         .target(
             name: "ROBVideoPipeline",
+            dependencies: ["ROBControlCore"]
+        ),
+        .target(
+            name: "ROBCerebroTransport",
             dependencies: ["ROBControlCore"]
         ),
         .testTarget(
@@ -26,6 +31,10 @@ let package = Package(
         .testTarget(
             name: "ROBVideoPipelineTests",
             dependencies: ["ROBControlCore", "ROBVideoPipeline"]
+        ),
+        .testTarget(
+            name: "ROBCerebroTransportTests",
+            dependencies: ["ROBControlCore", "ROBCerebroTransport"]
         ),
     ]
 )

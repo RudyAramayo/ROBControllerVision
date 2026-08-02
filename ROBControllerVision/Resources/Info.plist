@@ -21,7 +21,7 @@
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_robctl._udp</string>
-		<string>_roboNet._tcp</string>
+		<string>_robvideo._udp</string>
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>ROB Controller discovers and securely connects to robots on your local network.</string>
@@ -30,7 +30,7 @@
 		<key>UIApplicationPreferredDefaultSceneSessionRole</key>
 		<string>UIWindowSceneSessionRoleApplication</string>
 		<key>UIApplicationSupportsMultipleScenes</key>
-		<true/>
+		<false/>
 		<key>UISceneConfigurations</key>
 		<dict/>
 	</dict>

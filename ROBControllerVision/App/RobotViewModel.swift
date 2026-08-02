@@ -1,13 +1,34 @@
 import Foundation
 import Observation
+import ROBCerebroTransport
 import ROBControlCore
 import ROBVideoPipeline
+
+enum RobotConnectionDestination: String, CaseIterable, Identifiable {
+    case cerebro
+    case simulator
+
+    var id: Self { self }
+
+    var label: String {
+        switch self {
+        case .cerebro: "Cerebro"
+        case .simulator: "Simulator"
+        }
+    }
+}
 
 @MainActor
 @Observable
 final class RobotViewModel {
     private(set) var snapshot = RobotSessionSnapshot()
     private(set) var statusMessage = "Ready to connect to the simulator"
+    private(set) var pairedCredential: ROBCerebroCredential?
+    private(set) var pairingStatusMessage = "Install a unique pairing code issued by Cerebro."
+    private(set) var videoActionIsPending = false
+    var pairingCodeDraft = ""
+    var showsPairingSheet = false
+    var connectionDestination: RobotConnectionDestination = .simulator
     var speedLimit: Float = 0.65
 
     let gameController: GameControllerInput
@@ -15,8 +36,12 @@ final class RobotViewModel {
 
     @ObservationIgnored private let session: RobotSession
     @ObservationIgnored private let simulator: SimulatedRobotEndpoint
+    @ObservationIgnored private let pairingStore: ROBCerebroPairingStore
     @ObservationIgnored private var updatesTask: Task<Void, Never>?
     @ObservationIgnored private var actionTask: Task<Void, Never>?
+    @ObservationIgnored private var actionID: UUID?
+    @ObservationIgnored private var videoActionTask: Task<Void, Never>?
+    @ObservationIgnored private var videoActionID: UUID?
     @ObservationIgnored private var virtualInputTask: Task<Void, Never>?
     @ObservationIgnored private var videoLifecycleTask: Task<Void, Never>?
     @ObservationIgnored private var activeVideoDescriptor: VideoStreamDescriptor?
@@ -26,22 +51,26 @@ final class RobotViewModel {
     init(
         session: RobotSession = RobotSession(),
         simulator: SimulatedRobotEndpoint? = nil,
-        videoPipeline: VideoPipelineCoordinator = VideoPipelineCoordinator()
+        videoPipeline: VideoPipelineCoordinator = VideoPipelineCoordinator(),
+        pairingStore: ROBCerebroPairingStore = ROBCerebroPairingStore()
     ) {
         self.session = session
         self.simulator =
             simulator
             ?? SimulatedRobotEndpoint(videoDataSource: SyntheticVideoDataSource())
         self.videoPipeline = videoPipeline
+        self.pairingStore = pairingStore
         self.gameController = GameControllerInput()
         self.gameController.onSample = { [weak self] sample in
             self?.acceptGameController(sample)
         }
+        reloadPairingStatus(selectCerebroWhenPaired: true)
     }
 
     deinit {
         updatesTask?.cancel()
         actionTask?.cancel()
+        videoActionTask?.cancel()
         virtualInputTask?.cancel()
         videoLifecycleTask?.cancel()
     }
@@ -69,8 +98,10 @@ final class RobotViewModel {
     func stop() {
         updatesTask?.cancel()
         updatesTask = nil
+        actionID = nil
         actionTask?.cancel()
         actionTask = nil
+        cancelVideoAction()
         endVirtualMotion()
         stopVideoPipeline()
         gameController.stop()
@@ -87,7 +118,136 @@ final class RobotViewModel {
         {
             disconnect()
         } else {
-            connectToSimulator()
+            switch connectionDestination {
+            case .cerebro:
+                connectToCerebro()
+            case .simulator:
+                connectToSimulator()
+            }
+        }
+    }
+
+    var hasInstalledCerebroCredential: Bool { pairedCredential != nil }
+
+    var cerebroCredentialIsVerified: Bool {
+        snapshot.connection.isReady
+            && snapshot.connection.endpoint?.serviceType
+                == ROBCerebroPairingStore.controlServiceType
+    }
+
+    var cerebroCredentialStatusLabel: String {
+        if cerebroCredentialIsVerified {
+            return "Connected and verified"
+        }
+        return hasInstalledCerebroCredential ? "Credential installed" : "No credential"
+    }
+
+    var pairedCerebroDescription: String? {
+        guard let pairedCredential else { return nil }
+        let name = pairedCredential.deviceName ?? "Apple Vision Pro"
+        return "\(name) • \(pairedCredential.robotID.uuidString.prefix(8))"
+    }
+
+    var canChangeConnectionDestination: Bool {
+        snapshot.connection.phase == .disconnected || snapshot.connection.phase == .failed
+    }
+
+    var canToggleConnection: Bool {
+        switch snapshot.connection.phase {
+        case .disconnecting:
+            false
+        case .connected, .connecting, .handshaking:
+            true
+        case .disconnected, .failed:
+            connectionDestination == .simulator || hasInstalledCerebroCredential
+        }
+    }
+
+    var connectionButtonTitle: String {
+        switch snapshot.connection.phase {
+        case .connected, .connecting, .handshaking:
+            "Disconnect"
+        case .disconnecting:
+            "Disconnecting…"
+        case .disconnected, .failed:
+            connectionDestination == .cerebro ? "Connect Cerebro" : "Connect Simulator"
+        }
+    }
+
+    func installPairingCode() {
+        guard canChangeConnectionDestination else {
+            pairingStatusMessage = "Disconnect before replacing the installed credential."
+            return
+        }
+        do {
+            pairedCredential = try pairingStore.install(pairingCode: pairingCodeDraft)
+            pairingCodeDraft = ""
+            connectionDestination = .cerebro
+            pairingStatusMessage =
+                "Pairing installed in this Vision Pro's Keychain. Connect to verify the certificate pin and reciprocal proof."
+            statusMessage = "Ready to connect securely to Cerebro"
+        } catch {
+            pairingStatusMessage = error.localizedDescription
+        }
+    }
+
+    func forgetPairing() {
+        guard canChangeConnectionDestination else {
+            pairingStatusMessage = "Disconnect before removing the installed credential."
+            return
+        }
+        do {
+            try pairingStore.removeCredential()
+            pairedCredential = nil
+            pairingCodeDraft = ""
+            connectionDestination = .simulator
+            pairingStatusMessage =
+                "The local credential was removed. Revoke it in Cerebro if it should no longer be trusted."
+            statusMessage = "Ready to connect to the simulator"
+        } catch {
+            pairingStatusMessage = error.localizedDescription
+        }
+    }
+
+    func clearPairingCodeDraft() {
+        pairingCodeDraft = ""
+    }
+
+    private func reloadPairingStatus(selectCerebroWhenPaired: Bool) {
+        do {
+            pairedCredential = try pairingStore.loadCredential()
+            if let pairedCredential {
+                if selectCerebroWhenPaired {
+                    connectionDestination = .cerebro
+                    statusMessage = "Ready to connect securely to Cerebro"
+                }
+                pairingStatusMessage =
+                    "Credential ready for robot \(pairedCredential.robotID.uuidString.lowercased())."
+            }
+        } catch {
+            pairedCredential = nil
+            pairingStatusMessage = error.localizedDescription
+        }
+    }
+
+    func connectToCerebro() {
+        guard actionTask == nil else { return }
+        do {
+            guard let credential = try pairingStore.loadCredential() else {
+                throw ROBCerebroTransportError.pairingRequired
+            }
+            pairedCredential = credential
+            let transport = CerebroRobotTransport(credential: credential)
+            statusMessage = "Discovering paired Cerebro services…"
+            let session = session
+            let id = UUID()
+            actionID = id
+            actionTask = Task { [weak self] in
+                await session.connect(using: transport)
+                self?.finishAction(id)
+            }
+        } catch {
+            statusMessage = error.localizedDescription
         }
     }
 
@@ -96,20 +256,25 @@ final class RobotViewModel {
         statusMessage = "Connecting to ROB Simulator…"
         let session = session
         let simulator = simulator
+        let id = UUID()
+        actionID = id
         actionTask = Task { [weak self] in
             await session.connect(using: simulator)
-            self?.actionTask = nil
+            self?.finishAction(id)
         }
     }
 
     func disconnect() {
         endVirtualMotion()
         stopVideoPipeline()
+        cancelVideoAction()
         actionTask?.cancel()
         let session = session
+        let id = UUID()
+        actionID = id
         actionTask = Task { [weak self] in
             await session.disconnect()
-            self?.actionTask = nil
+            self?.finishAction(id)
         }
     }
 
@@ -140,26 +305,40 @@ final class RobotViewModel {
     }
 
     func toggleVideoSubscription() {
+        guard videoActionTask == nil else { return }
         let session = session
+        let id = UUID()
+        videoActionID = id
+        videoActionIsPending = true
         if let activeStream = snapshot.videoStreams.first {
-            Task { [weak self] in
+            videoActionTask = Task { [weak self] in
                 do {
                     try await session.unsubscribeVideo(activeStream.id)
-                    self?.statusMessage = "Video subscription stopped"
+                    if !Task.isCancelled {
+                        self?.statusMessage = "Video subscription stopped"
+                    }
                 } catch {
-                    self?.statusMessage = error.localizedDescription
+                    if !Task.isCancelled {
+                        self?.statusMessage = error.localizedDescription
+                    }
                 }
+                self?.finishVideoAction(id)
             }
             return
         }
 
         guard let camera = snapshot.connection.handshake?.capabilities.cameras.first else {
             statusMessage = "The connected robot did not advertise a camera"
+            finishVideoAction(id)
             return
         }
 
-        let request = Self.syntheticVideoRequest(cameraID: camera.id)
-        Task { [weak self] in
+        let delivery: VideoDeliveryMode =
+            snapshot.connection.endpoint?.transport == .simulated
+            ? .quicDatagrams
+            : .reliableStream
+        let request = Self.videoRequest(cameraID: camera.id, delivery: delivery)
+        videoActionTask = Task { [weak self] in
             do {
                 let response = try await session.subscribeVideo(request)
                 switch response {
@@ -169,13 +348,17 @@ final class RobotViewModel {
                     self?.statusMessage = "Video subscription rejected: \(reason.rawValue)"
                 }
             } catch {
-                self?.statusMessage = error.localizedDescription
+                if !Task.isCancelled {
+                    self?.statusMessage = error.localizedDescription
+                }
             }
+            self?.finishVideoAction(id)
         }
     }
 
-    private static func syntheticVideoRequest(
-        cameraID: CameraID
+    private static func videoRequest(
+        cameraID: CameraID,
+        delivery: VideoDeliveryMode
     ) -> VideoSubscriptionRequest {
         VideoSubscriptionRequest(
             cameraID: cameraID,
@@ -186,7 +369,7 @@ final class RobotViewModel {
                 maximumFramesPerSecond: 20,
                 maximumBitrate: 1_500_000
             ),
-            delivery: .quicDatagrams
+            delivery: delivery
         )
     }
 
@@ -195,28 +378,31 @@ final class RobotViewModel {
             guard actionTask == nil else { return }
             let session = session
             let simulator = simulator
+            let id = UUID()
+            actionID = id
             actionTask = Task { [weak self] in
                 await session.connect(using: simulator)
                 let snapshot = await session.currentSnapshot()
                 guard let cameraID = snapshot.connection.handshake?.capabilities.cameras.first?.id else {
                     self?.statusMessage = "Video smoke test found no camera"
-                    self?.actionTask = nil
+                    self?.finishAction(id)
                     return
                 }
                 do {
                     _ = try await session.subscribeVideo(
-                        Self.syntheticVideoRequest(cameraID: cameraID)
+                        Self.videoRequest(cameraID: cameraID, delivery: .quicDatagrams)
                     )
                 } catch {
                     self?.statusMessage = "Video smoke test failed: \(error.localizedDescription)"
                 }
-                self?.actionTask = nil
+                self?.finishAction(id)
             }
         }
     #endif
 
     func beginVirtualMotion(linear: Float, angular: Float) {
-        guard snapshot.connection.isReady,
+        guard sceneIsActive,
+            snapshot.connection.isReady,
             snapshot.safety.isArmed,
             !snapshot.safety.emergencyStopIsLatched
         else { return }
@@ -258,7 +444,10 @@ final class RobotViewModel {
 
     func setSceneActive(_ active: Bool) {
         sceneIsActive = active
+        let activeVideoID = snapshot.videoStreams.first?.id
         if !active {
+            clearPairingCodeDraft()
+            cancelVideoAction()
             endVirtualMotion()
             stopVideoPipeline()
         } else {
@@ -267,10 +456,14 @@ final class RobotViewModel {
         let session = session
         Task {
             await session.setSceneActive(active)
+            if !active, let activeVideoID {
+                try? await session.unsubscribeVideo(activeVideoID)
+            }
         }
     }
 
     private func acceptGameController(_ sample: GameControllerSample) {
+        guard sceneIsActive else { return }
         guard sample.isConnected else {
             let session = session
             Task {
@@ -303,6 +496,9 @@ final class RobotViewModel {
         {
             virtualInputTask?.cancel()
             virtualInputTask = nil
+        }
+        if snapshot.connection.phase == .failed || snapshot.connection.phase == .disconnected {
+            cancelVideoAction()
         }
 
         switch snapshot.connection.phase {
@@ -361,5 +557,25 @@ final class RobotViewModel {
             guard !Task.isCancelled else { return }
             await videoPipeline.stop()
         }
+    }
+
+    private func finishAction(_ id: UUID) {
+        guard actionID == id else { return }
+        actionID = nil
+        actionTask = nil
+    }
+
+    private func finishVideoAction(_ id: UUID) {
+        guard videoActionID == id else { return }
+        videoActionID = nil
+        videoActionTask = nil
+        videoActionIsPending = false
+    }
+
+    private func cancelVideoAction() {
+        videoActionID = nil
+        videoActionTask?.cancel()
+        videoActionTask = nil
+        videoActionIsPending = false
     }
 }

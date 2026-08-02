@@ -9,6 +9,11 @@ struct VideoPanel: View {
         model.snapshot.videoStreams.first
     }
 
+    private var actionTitle: String {
+        if model.videoActionIsPending { return "Working…" }
+        return stream == nil ? "Subscribe" : "Unsubscribe"
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             header
@@ -20,7 +25,12 @@ struct VideoPanel: View {
                 if let stream {
                     ActiveVideoView(stream: stream, pipeline: model.videoPipeline)
                 } else {
-                    VideoUnavailableView()
+                    VideoUnavailableView(
+                        isConnected: model.snapshot.connection.isReady,
+                        cameraIsAvailable:
+                            model.snapshot.connection.handshake?.capabilities.cameras.isEmpty
+                            == false
+                    )
                 }
             }
             .frame(minHeight: 390)
@@ -39,12 +49,13 @@ struct VideoPanel: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            Button(stream == nil ? "Subscribe" : "Unsubscribe") {
+            Button(actionTitle) {
                 model.toggleVideoSubscription()
             }
             .buttonStyle(.bordered)
             .disabled(
-                !model.snapshot.connection.isReady
+                model.videoActionIsPending
+                    || !model.snapshot.connection.isReady
                     || model.snapshot.connection.handshake?.capabilities.cameras.isEmpty != false
             )
         }
@@ -117,19 +128,36 @@ private struct ActiveVideoView: View {
 }
 
 private struct VideoUnavailableView: View {
+    let isConnected: Bool
+    let cameraIsAvailable: Bool
+
+    private var title: String {
+        if !isConnected { return "Connect to a robot" }
+        return cameraIsAvailable ? "Camera ready" : "Cerebro video unavailable"
+    }
+
+    private var detail: String {
+        if !isConnected {
+            return "Connect first, then subscribe to start a negotiated H.264 stream."
+        }
+        if cameraIsAvailable {
+            return "Select Subscribe to start the H.264 stream and Vision Pro decoder."
+        }
+        return
+            "Robot control remains available. Check Cerebro's camera service, then reconnect to advertise its camera."
+    }
+
     var body: some View {
         VStack(spacing: 12) {
             Image(systemName: "video.slash.fill")
                 .font(.system(size: 52))
-            Text("Subscribe after connecting")
+            Text(title)
                 .font(.headline)
-            Text(
-                "Subscribe to start the synthetic camera, H.264 encoder, bounded data channel, and Vision Pro decoder."
-            )
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .multilineTextAlignment(.center)
-            .frame(maxWidth: 420)
+            Text(detail)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 420)
         }
     }
 }

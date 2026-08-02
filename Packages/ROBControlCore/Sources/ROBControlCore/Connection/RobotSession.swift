@@ -646,7 +646,8 @@ public actor RobotSession {
             videoTimeoutTasks.removeValue(forKey: request.id)?.cancel()
             pendingVideoSubscriptions.removeValue(forKey: request.id)?.resume(throwing: error)
             abandonedVideoSubscriptions.remove(request.id)
-            handleSendFailure(error)
+            // Video is an independently authenticated media service. A failed subscription must
+            // not tear down the safety-critical control connection.
         }
     }
 

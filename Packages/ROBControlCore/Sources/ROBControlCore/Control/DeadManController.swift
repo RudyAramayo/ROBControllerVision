@@ -52,6 +52,7 @@ public struct DeadManController: Sendable {
         _ sample: OperatorControlSample,
         at instant: ContinuousClock.Instant = .now
     ) {
+        guard sceneIsActive else { return }
         guard latestInput.map({ sample.sequence > $0.sequence }) ?? true else { return }
         latestInput = sample
         latestInputAt = instant

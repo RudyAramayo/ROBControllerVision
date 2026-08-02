@@ -85,6 +85,30 @@ struct DeadManControllerTests {
         )
     }
 
+    @Test("Input received in an inactive scene cannot resume motion")
+    func inactiveSceneRejectsInput() {
+        let origin = ContinuousClock.now
+        var controller = DeadManController()
+        controller.setArmed(true)
+        controller.setSceneActive(false)
+        controller.update(
+            OperatorControlSample(
+                sequence: 1,
+                source: .gameController,
+                linear: 1,
+                angular: 0,
+                deadManIsHeld: true
+            ),
+            at: origin
+        )
+
+        controller.setSceneActive(true)
+
+        #expect(
+            controller.evaluate(connectionIsReady: true, at: origin) == .stop(.deadManReleased)
+        )
+    }
+
     @Test("Fresh operator intent clears a recoverable input invalidation")
     func freshInputClearsInvalidation() {
         let origin = ContinuousClock.now

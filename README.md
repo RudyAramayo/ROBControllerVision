@@ -1,28 +1,56 @@
 # ROBControllerVision
 
-`ROBControllerVision` is an isolated, native SwiftUI controller scaffold for Apple Vision Pro. It currently drives a deterministic simulated robot and does not modify or depend on the active `ROBController` or `Cerebro` repositories.
+`ROBControllerVision` is a native SwiftUI controller for Apple Vision Pro. It can connect to a real Cerebro host over authenticated QUIC/TLS or run against the deterministic simulator for development and UI testing.
 
 ## Included
 
-- A visionOS 2.0 `WindowGroup` dashboard with connection, telemetry, safety, motion, and video panels.
-- A pure-Foundation Swift 6 target, `ROBControlCore`, containing transport abstractions, connection/session state, control leases, dead-man evaluation, video protocol messages, and the simulator.
-- A separate `ROBVideoPipeline` target containing the pooled synthetic source, VideoToolbox encoder, bounded channel, sample reconstruction, and AVFoundation receiver.
+- A visionOS 2.0 `WindowGroup` dashboard with connection, safety, motion, video, and simulator-telemetry panels. Cerebro's legacy application messages are not yet mapped into `RobotTelemetry`, so the real endpoint leaves those telemetry fields empty.
+- `ROBControlCore`, a pure-Foundation Swift 6 target containing transport abstractions, connection/session state, control leases, dead-man evaluation, video-domain messages, and the simulator.
+- `ROBCerebroTransport`, the Network.framework and Security.framework adapter for Cerebro pairing, discovery, reciprocal authentication, established ROBController control payloads, and the separate video service.
+- `ROBVideoPipeline`, containing the pooled synthetic source, VideoToolbox encoder, bounded simulator channel, strict H.264 receiver, and AVFoundation display path.
 - Physical game-controller input through GameController. Hold **A** or the right trigger while using the left thumbstick.
-- Press-and-hold spatial controls for simulator operation without a gamepad.
+- Press-and-hold spatial controls for operation without a gamepad.
 - A latched software emergency stop and explicit reset/disarm flow.
-- Dynamic video subscription negotiation plus a complete synthetic camera path: reusable pixel buffers, real-time H.264 encoding, a bounded data channel, validated access units, system decoding, and live SwiftUI display.
-- Package tests covering safety boundaries, connection state, simulator watchdog behavior, reconnect behavior, bounded video transport, wire validation, real H.264 encoding, sample reconstruction, and negotiated streaming.
+- Demand-driven Cerebro H.264 streaming plus a complete synthetic H.264 path for offline testing.
 
-## Open and run
+## Connect to Cerebro
+
+The Vision Pro and Cerebro Mac must be on the same local network. `_robctl._udp` is required for robot control. Cerebro must also have a working camera source and advertise `_robvideo._udp` for the Vision app to offer video:
+
+```text
+_robctl._udp   / robctl/2    authenticated robot control and live session
+_robvideo._udp / robvideo/1  authenticated video negotiation and H.264 media
+```
+
+Pair and connect as follows:
+
+1. In Cerebro, open **Manage Paired Devices…** and choose **Pair ROBController**.
+2. Enter a recognizable name such as **Apple Vision Pro**. Create a new code for this device even if another ROBController is already paired.
+3. On Vision Pro, choose **Cerebro**, select **Pair Cerebro**, and paste the complete `ROBCTL2:...` enrollment code.
+4. Select **Install pairing code**. The credential and Cerebro certificate pin are stored in this Vision Pro's Keychain. The pairing status reads **Credential installed** at this point; installation alone has not authenticated Cerebro.
+5. Accept the visionOS Local Network permission prompt, then select **Connect Cerebro**.
+6. After the control connection authenticates, the pairing status reads **Connected and verified**. If Cerebro's video service also authenticated and advertised a camera, select **Subscribe** in the Robot Camera panel. The app requests the `front` camera as H.264 at up to 960 x 540, 20 fps, and 1.5 Mbit/s using `reliableStream` delivery.
+7. Arm motion, then hold a directional control or use a game controller while holding its dead-man control. Release it to stop.
+
+Each physical controller must have its own Cerebro-issued credential. Do not reuse the iPhone ROBController code or copy its Keychain item to Vision Pro. Reusing a code clones the controller identity, prevents independent revocation, and can cause Cerebro's duplicate-session protection to reject one of the devices.
+
+### Certificate migration warning
+
+Cerebro now keeps one canonical server certificate and uses it for control, video, Bonjour identity material, and every pairing code. The first launch after adopting that identity fix can intentionally replace an older leaf certificate, making every pre-upgrade certificate pin stale.
+
+If this is that first migrated launch, revoke the old Vision Pro entry in **Manage Paired Devices…**, issue a fresh **Pair ROBController** code, and install it in the Vision app before connecting. Reinstalling the fresh code intentionally replaces the app's single local Keychain profile. Do not disable certificate pinning as a workaround. After migration, an ordinary Cerebro restart must keep the same certificate fingerprint; an unexpected later change should be investigated before re-pairing devices.
+
+## Run the simulator
 
 1. Open `ROBControllerVision.xcodeproj` in Xcode 26 or newer.
-2. Select the `ROBControllerVision` scheme.
-3. Choose an Apple Vision Pro simulator or a provisioned device.
-4. Run the app and select **Connect Simulator**.
-5. Select **Subscribe** to start the synthetic H.264 camera stream.
-6. Arm motion, then hold a directional control. Release it to stop.
+2. Select the `ROBControllerVision` scheme and a Vision Pro simulator or provisioned device.
+3. Run the app, choose **Simulator**, and select **Connect Simulator**.
+4. Select **Subscribe** to start the synthetic H.264 stream.
+5. Arm motion, then hold a directional control. Release it to stop.
 
-Command-line validation:
+The simulator remains available after a Cerebro credential is installed; use the endpoint picker while disconnected.
+
+## Command-line validation
 
 ```bash
 swift test --package-path Packages/ROBControlCore
@@ -37,7 +65,9 @@ xcodebuild \
   build
 ```
 
-The current placeholder bundle identifier is `com.raramayo.ROBControllerVision`. Change it and select your development team before installing on a physical device.
+The placeholder bundle identifier is `com.raramayo.ROBControllerVision`. Change it and select your development team before installing on a physical device.
+
+Automated package and simulator-build checks validate the state machines, wire codecs, and compilation boundaries. They do not replace a two-device smoke test of Bonjour, Local Network permission, Cerebro camera capture, certificate pinning, video recovery, robot watchdog behavior, and the physical emergency stop.
 
 ## Safety behavior
 
@@ -51,43 +81,54 @@ Motion is inhibited by default. The operator must connect, arm motion, and conti
 - the operator disarms motion; or
 - the emergency stop is latched.
 
-The simulated endpoint independently enforces a receive-side command watchdog. A production integration must add the equivalent watchdog to `Cerebro`; an app-only dead-man cannot stop a robot after total network loss. The software stop control supplements and never replaces a physical, independently wired emergency stop.
+The simulator independently enforces a receive-side watchdog. Cerebro remains the authoritative real-robot receiver and must independently stop on stale or disconnected controller input; an app-only dead-man cannot stop a robot after total network loss. The software stop control supplements and never replaces a physical, independently wired emergency stop.
 
-On visionOS, game-controller delivery depends on the app receiving controller events. This scaffold intentionally treats missing fresh callbacks as expired input instead of replaying a retained thumbstick value. Validate the interaction and gaze/focus behavior on the target Vision Pro and controller before real-robot use.
+On visionOS, game-controller delivery depends on the app receiving controller events. Missing fresh callbacks are treated as expired input instead of replaying a retained thumbstick value. Validate controller delivery, gaze/focus behavior, the Cerebro watchdog, and the physical stop on the target hardware before real-robot use.
 
-## Video implementation
+## Network and video implementation
 
-The simulator exercises this complete encoded-video path:
+The production connections are deliberately separate:
 
 ```text
-SyntheticPixelBufferSource
-    → VideoToolbox H.264 encoder
-    → bounded in-memory video data channel
+Vision control domain
+    → CerebroRobotTransport
+    → _robctl._udp / robctl/2 / pinned TLS 1.3
+    → reciprocal HMAC proof
+    → exact live control-session UUID
+
+Vision video request
+    → optional _robvideo._udp / robvideo/1 / the same certificate pin
+    → video-specific reciprocal HMAC proof
+    → capabilities and reliableStream subscription carrying that exact UUID
+    → RVID-framed RBVD codec configuration and AVCC H.264 access units
     → session/stream/access-unit validator
-    → AVSampleBufferVideoRenderer decoder
+    → AVSampleBufferVideoRenderer
     → SwiftUI video surface
 ```
 
-The source starts only after a subscription is accepted and a controller opens the video data stream. It stops when the display consumer closes, the scene becomes inactive, the operator unsubscribes, or the session disconnects. Each open receives a unique channel token, so delayed cleanup from an old session cannot close a replacement stream. Video uses a separate nonblocking channel, so queue pressure cannot delay drive or emergency-stop messages. Normal encoder and channel pressure drops media instead of terminating the stream; the receiver suppresses dependent frames and requests a new IDR keyframe after a gap or decoder flush.
+Video capabilities, subscribe/response, feedback, unsubscribe, codec configuration, access units, and stream-ended events all travel on `_robvideo._udp`. They are not sent over the physical `_robctl._udp` connection. The exact live control-session UUID binds the independent video connection to the authenticated operator; disconnecting control, replacing its session, revoking the credential, suspending the app, or unsubscribing tears down video. Video discovery, authentication, or runtime failure removes video availability or ends active streams but leaves authenticated robot control connected.
 
-The in-memory channel is the network stand-in. It carries the same session-bound codec-configuration and access-unit messages that a future authenticated network adapter will serialize, fragment, reassemble, and validate. Advertised simulator codecs are intersected with the injected source's actual capabilities; requested delivery modes are enforced during subscription negotiation, and the accepted bitrate is clamped to the source limit. It does not pretend that large H.264 access units fit in one network datagram.
+The simulator uses the same session and decoder boundaries but replaces the network adapter with `SyntheticPixelBufferSource`, a real-time VideoToolbox encoder, and `BoundedInMemoryVideoChannel`. Normal encoder or channel pressure drops media rather than delaying motion or stop commands. Sequence gaps suppress predictive frames and request a new IDR keyframe.
 
-## Video protocol
+See [the architecture notes](docs/architecture.md), [Cerebro video integration guide](docs/real-video-integration.md), and [protocol mapping](docs/protocol-v2.md).
 
-Video subscription control is already modeled with:
+## Diagnostics
 
-- camera and codec capabilities;
-- preferred codecs;
-- maximum resolution, frame rate, and bitrate;
-- delivery mode;
-- accept/reject responses;
-- unsubscribe requests; and
-- receiver feedback and keyframe requests.
+From another Mac on the same LAN, run each browser in a separate Terminal window:
 
-Subscription messages belong on the reliable control channel. Encoded frames use the separate `RobotVideoDataTransport` boundary. See [the architecture notes](docs/architecture.md) and [real-robot integration guide](docs/real-video-integration.md) for the replacement points.
+```bash
+dns-sd -B _robctl._udp local.
+dns-sd -B _robvideo._udp local.
+```
 
-The tagged JSON envelope, session, lease, and negotiation rules are documented in [the v2 protocol scaffold](docs/protocol-v2.md).
+Cerebro should report its control service as ready using `robctl/2` and, when camera viewing is available, its video service using `robvideo/1`. If neither service appears, verify that both devices are on the same LAN, Local Network access is allowed for ROBControllerVision, Cerebro is running, and the host firewall permits the services.
+
+The Cerebro endpoint treats video as optional for safety. If `_robctl._udp` authenticates but video discovery or authentication fails, **Connect Cerebro** still succeeds with no advertised cameras and control remains available. The current session does not hot-add a later video service; after `_robvideo._udp` becomes healthy, disconnect and reconnect to refresh the one-time camera capabilities.
+
+If control connects but the camera is absent or **Subscribe** remains unavailable, verify `_robvideo._udp`, its authentication, and Cerebro's selected camera. An unavailable video service or camera produces a control handshake with no cameras, so reconnect after correcting the video state.
+
+If pinned TLS or reciprocal authentication fails immediately after the Cerebro canonical-certificate migration, revoke the stale Cerebro device entry and install a newly issued code. If video reports an authorization or stale-session failure, disconnect both connections and reconnect control before subscribing; never substitute a locally generated session UUID.
 
 ## Repository boundary
 
-This repository contains no source references to `../ROBController` or `../Cerebro`. A future `LegacyAutoNetAdapter` can be added behind the `RobotTransport` protocol after the concurrent changes in those repositories settle. Do not copy their current keyed-archive wire representation into the core domain model.
+The repository is self-contained and has no source-path dependency on sibling `ROBController` or `Cerebro` checkouts. `ROBCerebroTransport` keeps Cerebro's wire framing, pairing material, and established keyed-archive controller compatibility private behind `RobotTransport`; those legacy shapes do not leak into the `ROBControlCore` domain model.

@@ -3,7 +3,7 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 56;
+	objectVersion = 60;
 	objects = {
 
 /* Begin PBXBuildFile section */
@@ -20,6 +20,8 @@
 		B0000000000000000000000B /* SampleBufferVideoView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0000000000000000000000C /* SampleBufferVideoView.swift */; };
 		B0000000000000000000000C /* VideoPipelineCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0000000000000000000000D /* VideoPipelineCoordinator.swift */; };
 		B0000000000000000000000D /* ROBVideoPipeline in Frameworks */ = {isa = PBXBuildFile; productRef = P00000000000000000000003 /* ROBVideoPipeline */; };
+		B0000000000000000000000E /* ROBCerebroTransport in Frameworks */ = {isa = PBXBuildFile; productRef = P00000000000000000000004 /* ROBCerebroTransport */; };
+		B0000000000000000000000F /* CerebroPairingSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0000000000000000000000E /* CerebroPairingSheet.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -36,6 +38,7 @@
 		F0000000000000000000000B /* ROBControllerVision.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ROBControllerVision.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		F0000000000000000000000C /* SampleBufferVideoView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SampleBufferVideoView.swift; sourceTree = "<group>"; };
 		F0000000000000000000000D /* VideoPipelineCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoPipelineCoordinator.swift; sourceTree = "<group>"; };
+		F0000000000000000000000E /* CerebroPairingSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CerebroPairingSheet.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -45,6 +48,7 @@
 			files = (
 				B0000000000000000000000A /* ROBControlCore in Frameworks */,
 				B0000000000000000000000D /* ROBVideoPipeline in Frameworks */,
+				B0000000000000000000000E /* ROBCerebroTransport in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -103,6 +107,7 @@
 			isa = PBXGroup;
 			children = (
 				F00000000000000000000005 /* ConnectionStatusView.swift */,
+				F0000000000000000000000E /* CerebroPairingSheet.swift */,
 			);
 			path = Connection;
 			sourceTree = "<group>";
@@ -148,15 +153,6 @@
 			path = GameController;
 			sourceTree = "<group>";
 		};
-		A00000000000000000000013 /* Video */ = {
-			isa = PBXGroup;
-			children = (
-				F0000000000000000000000C /* SampleBufferVideoView.swift */,
-				F0000000000000000000000D /* VideoPipelineCoordinator.swift */,
-			);
-			path = Video;
-			sourceTree = "<group>";
-		};
 		A0000000000000000000000F /* Resources */ = {
 			isa = PBXGroup;
 			children = (
@@ -164,6 +160,15 @@
 				F0000000000000000000000A /* Info.plist */,
 			);
 			path = Resources;
+			sourceTree = "<group>";
+		};
+		A00000000000000000000013 /* Video */ = {
+			isa = PBXGroup;
+			children = (
+				F0000000000000000000000C /* SampleBufferVideoView.swift */,
+				F0000000000000000000000D /* VideoPipelineCoordinator.swift */,
+			);
+			path = Video;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -185,6 +190,7 @@
 			packageProductDependencies = (
 				P00000000000000000000002 /* ROBControlCore */,
 				P00000000000000000000003 /* ROBVideoPipeline */,
+				P00000000000000000000004 /* ROBCerebroTransport */,
 			);
 			productName = ROBControllerVision;
 			productReference = F0000000000000000000000B /* ROBControllerVision.app */;
@@ -215,7 +221,7 @@
 			);
 			mainGroup = A00000000000000000000004;
 			packageReferences = (
-				P00000000000000000000001 /* ROBControlCore */,
+				P00000000000000000000001 /* XCLocalSwiftPackageReference "Packages/ROBControlCore" */,
 			);
 			productRefGroup = A00000000000000000000005 /* Products */;
 			projectDirPath = "";
@@ -252,6 +258,7 @@
 				B00000000000000000000008 /* VideoPanel.swift in Sources */,
 				B0000000000000000000000B /* SampleBufferVideoView.swift in Sources */,
 				B0000000000000000000000C /* VideoPipelineCoordinator.swift in Sources */,
+				B0000000000000000000000F /* CerebroPairingSheet.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -375,6 +382,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 975CAGD5EW;
 				ENABLE_PREVIEWS = YES;
 				INFOPLIST_FILE = ROBControllerVision/Resources/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -402,6 +410,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 975CAGD5EW;
 				ENABLE_PREVIEWS = YES;
 				INFOPLIST_FILE = ROBControllerVision/Resources/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -446,7 +455,7 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
-		P00000000000000000000001 /* ROBControlCore */ = {
+		P00000000000000000000001 /* XCLocalSwiftPackageReference "Packages/ROBControlCore" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Packages/ROBControlCore;
 		};
@@ -455,13 +464,18 @@
 /* Begin XCSwiftPackageProductDependency section */
 		P00000000000000000000002 /* ROBControlCore */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = P00000000000000000000001 /* ROBControlCore */;
+			package = P00000000000000000000001 /* XCLocalSwiftPackageReference "Packages/ROBControlCore" */;
 			productName = ROBControlCore;
 		};
 		P00000000000000000000003 /* ROBVideoPipeline */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = P00000000000000000000001 /* ROBControlCore */;
+			package = P00000000000000000000001 /* XCLocalSwiftPackageReference "Packages/ROBControlCore" */;
 			productName = ROBVideoPipeline;
+		};
+		P00000000000000000000004 /* ROBCerebroTransport */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = P00000000000000000000001 /* XCLocalSwiftPackageReference "Packages/ROBControlCore" */;
+			productName = ROBCerebroTransport;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
