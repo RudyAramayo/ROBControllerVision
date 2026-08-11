@@ -13,6 +13,8 @@ struct GameControllerSample: Equatable, Sendable {
     var cameraTilt: Float
     var controllerPoses: ControllerPosePair?
     var deadManIsHeld: Bool
+    var leftGripperClosed: Bool
+    var rightGripperClosed: Bool
 
     static let disconnected = GameControllerSample(
         isConnected: false,
@@ -21,7 +23,9 @@ struct GameControllerSample: Equatable, Sendable {
         cameraPan: 0,
         cameraTilt: 0,
         controllerPoses: nil,
-        deadManIsHeld: false
+        deadManIsHeld: false,
+        leftGripperClosed: false,
+        rightGripperClosed: false
     )
 }
 
@@ -43,6 +47,7 @@ final class GameControllerInput: NSObject {
         var cameraTilt: Float = 0
         var pose: ControllerPose?
         var deadManIsHeld = false
+        var triggerPressed = false
     }
 
     private(set) var isConnected = false
@@ -50,8 +55,10 @@ final class GameControllerInput: NSObject {
     private(set) var deadManIsHeld = false
     private(set) var leftTread: Float = 0
     private(set) var rightTread: Float = 0
+    private(set) var leftGripperClosed = false
+    private(set) var rightGripperClosed = false
     private(set) var poseTrackingStatus = "Spatial pose tracking has not started"
-    private(set) var lastEventDescription = "Hold A or the right trigger to drive"
+    private(set) var lastEventDescription = "Hold both VR grip buttons to enable control"
 
     @ObservationIgnored var onSample: ((GameControllerSample) -> Void)?
     @ObservationIgnored private var controllers: [ObjectIdentifier: GCController] = [:]
@@ -212,8 +219,12 @@ final class GameControllerInput: NSObject {
         state.secondStickY = gamepad.rightThumbstick.yAxis.value
         state.cameraPan = gamepad.rightThumbstick.xAxis.value
         state.cameraTilt = gamepad.rightThumbstick.yAxis.value
-        state.deadManIsHeld = allowDeadMan
-            && (gamepad.buttonA.isPressed || gamepad.rightTrigger.value > 0.5)
+        // Index triggers are reserved for the two grippers. A conventional
+        // gamepad uses A or both shoulder buttons as the continuous safety hold.
+        state.deadManIsHeld = allowDeadMan && (
+            gamepad.buttonA.isPressed
+            || (gamepad.leftShoulder.isPressed && gamepad.rightShoulder.isPressed)
+        )
         controllerStates[id] = state
         publishCombinedSample()
     }
@@ -230,13 +241,13 @@ final class GameControllerInput: NSObject {
             return
         }
         state.stickY = primary.yAxis.value
-        state.deadManIsHeld = allowDeadMan && (
-            profile.buttons[GCInputButtonA]?.isPressed == true
-            || (profile.buttons[GCInputRightTrigger]?.value ?? 0) > 0.5
-            || (profile.buttons[GCInputLeftTrigger]?.value ?? 0) > 0.5
-            || (profile.buttons["Trigger"]?.value ?? 0) > 0.5
-            || profile.buttons["Grip Button"]?.isPressed == true
-        )
+        state.deadManIsHeld = allowDeadMan && Self.gripIsPressed(in: profile)
+        state.triggerPressed = (
+            profile.buttons["Trigger"]?.value
+                ?? profile.buttons[GCInputRightTrigger]?.value
+                ?? profile.buttons[GCInputLeftTrigger]?.value
+                ?? 0
+        ) > 0.5
         controllerStates[id] = state
         publishCombinedSample()
     }
@@ -263,19 +274,33 @@ final class GameControllerInput: NSObject {
         var right: Float = 0
         var cameraPan: Float = 0
         var cameraTilt: Float = 0
+        var leftGripperClosed = false
+        var rightGripperClosed = false
         for state in controllerStates.values {
             switch state.side {
             case .left:
                 left = state.stickY
+                leftGripperClosed = state.triggerPressed
             case .right:
                 right = state.stickY
+                rightGripperClosed = state.triggerPressed
             case .both:
                 left = state.stickY
                 right = state.secondStickY
+                // Conventional gamepads expose independent index triggers.
+                if let gamepad = controllers.first(where: { controllerStates[$0.key]?.side == .both })?.value.extendedGamepad {
+                    leftGripperClosed = gamepad.leftTrigger.value > 0.5
+                    rightGripperClosed = gamepad.rightTrigger.value > 0.5
+                }
             }
             cameraPan = state.cameraPan
             cameraTilt = state.cameraTilt
         }
+        let conventionalDeadMan = controllerStates.values.first(where: { $0.side == .both })?.deadManIsHeld == true
+        let hasLeftSpatialController = controllerStates.values.contains(where: { $0.side == .left })
+        let hasRightSpatialController = controllerStates.values.contains(where: { $0.side == .right })
+        let spatialDeadMan = hasLeftSpatialController && hasRightSpatialController
+            && controllerStates.values.filter({ $0.side != .both }).allSatisfy(\.deadManIsHeld)
         apply(GameControllerSample(
             isConnected: !controllerStates.isEmpty,
             leftTread: left,
@@ -283,7 +308,9 @@ final class GameControllerInput: NSObject {
             cameraPan: cameraPan,
             cameraTilt: cameraTilt,
             controllerPoses: posePair(),
-            deadManIsHeld: controllerStates.values.contains(where: \.deadManIsHeld)
+            deadManIsHeld: conventionalDeadMan || spatialDeadMan,
+            leftGripperClosed: leftGripperClosed,
+            rightGripperClosed: rightGripperClosed
         ))
         updateControllerName()
     }
@@ -368,11 +395,19 @@ final class GameControllerInput: NSObject {
             ?? profile.dpads.first(where: { $0.key != GCInputDirectionPad })?.value
     }
 
+    nonisolated private static func gripIsPressed(in profile: GCPhysicalInputProfile) -> Bool {
+        profile.buttons["Grip Button"]?.isPressed == true
+            || profile.buttons["Grip"]?.isPressed == true
+            || profile.buttons[GCInputButtonA]?.isPressed == true
+    }
+
     private func apply(_ sample: GameControllerSample) {
         isConnected = sample.isConnected
         deadManIsHeld = sample.deadManIsHeld
         leftTread = sample.leftTread
         rightTread = sample.rightTread
+        leftGripperClosed = sample.leftGripperClosed
+        rightGripperClosed = sample.rightGripperClosed
         if !sample.isConnected {
             controllerName = "No game controller"
             lastEventDescription = "Connect a compatible controller"

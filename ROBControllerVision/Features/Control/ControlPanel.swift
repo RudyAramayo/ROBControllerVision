@@ -48,6 +48,22 @@ struct ControlPanel: View {
                 .font(.caption2.weight(.medium))
                 .foregroundStyle(.secondary)
 
+            HStack(spacing: 12) {
+                Label(
+                    model.gameController.leftGripperClosed ? "Left closed" : "Left open",
+                    systemImage: model.gameController.leftGripperClosed ? "hand.raised.fill" : "hand.raised"
+                )
+                Label(
+                    model.gameController.rightGripperClosed ? "Right closed" : "Right open",
+                    systemImage: model.gameController.rightGripperClosed ? "hand.raised.fill" : "hand.raised"
+                )
+            }
+            .font(.caption.bold())
+
+            Text("Hold both grip buttons for the dead-man • index triggers close/open the matching grippers")
+                .font(.caption2.weight(.medium))
+                .foregroundStyle(.secondary)
+
             Label(model.gameController.poseTrackingStatus, systemImage: "move.3d")
                 .font(.caption2)
                 .foregroundStyle(.secondary)

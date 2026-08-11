@@ -202,7 +202,7 @@ public actor SimulatedRobotEndpoint: RobotTransport, RobotVideoDataTransport {
             }
             eventContinuation?.yield(.safety(.armedChanged(armed)))
 
-        case .drive(let requestedMotion, _):
+        case .drive(let requestedMotion, _, _, _):
             guard isArmed && !emergencyStopIsLatched else {
                 stopMotion(reason: emergencyStopIsLatched ? .emergencyStop : .operatorDisarmed)
                 throw RobotTransportError.invalidState("Motion command rejected while motion is inhibited.")

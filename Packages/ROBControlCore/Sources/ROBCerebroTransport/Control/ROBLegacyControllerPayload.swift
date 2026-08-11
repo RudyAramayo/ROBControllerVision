@@ -19,8 +19,11 @@ enum ROBLegacyControllerPayload {
 
     static func controllerSnapshot(
         motion: MotionVector,
+        camera: CameraVector = .centered,
+        grippers: GripperVector = .inactive,
         senderID: UUID,
         brakeIsLocked: Bool,
+        neckControlActive: Bool = false,
         controllerPoses: ControllerPosePair? = nil
     ) throws -> Data {
         let left: Float
@@ -42,9 +45,9 @@ enum ROBLegacyControllerPayload {
             "1.00,0.00,0.00,",
             "0.00,1.00,0.00,",
             "0.00,0.00,1.00,",
-            "yaw=0.000000",
-            "pitch=0.000000",
-            "roll=0.000000",
+            String(format: "yaw=%.6f", locale: posixLocale, camera.pan),
+            String(format: "pitch=%.6f", locale: posixLocale, camera.tilt),
+            "roll=\(neckControlActive ? "1.000000" : "0.000000")",
             String(format: "touchPadL - 0.000000,%.6f", locale: posixLocale, left),
             String(format: "touchPadR - 0.000000,%.6f", locale: posixLocale, right),
             "(Lat,Long):0.000000:0.000000",
@@ -55,7 +58,12 @@ enum ROBLegacyControllerPayload {
             "TEXT=",
         ].joined(separator: "\n")
 
-        return try archive(message: message, senderID: senderID, controllerPoses: controllerPoses)
+        return try archive(
+            message: message,
+            senderID: senderID,
+            controllerPoses: controllerPoses,
+            grippers: grippers
+        )
     }
 
     static func stoppedSnapshot(
@@ -66,6 +74,7 @@ enum ROBLegacyControllerPayload {
             motion: .stopped,
             senderID: senderID,
             brakeIsLocked: true,
+            neckControlActive: false,
             controllerPoses: controllerPoses
         )
     }
@@ -75,7 +84,8 @@ enum ROBLegacyControllerPayload {
     private static func archive(
         message: String,
         senderID: UUID,
-        controllerPoses: ControllerPosePair? = nil
+        controllerPoses: ControllerPosePair? = nil,
+        grippers: GripperVector = .inactive
     ) throws -> Data {
         let envelope = NSMutableDictionary(dictionary: [
             "message": message,
@@ -85,6 +95,11 @@ enum ROBLegacyControllerPayload {
             envelope["controller.pose.version"] = "1"
             if let left = controllerPoses.left { envelope["controller.pose.left"] = poseString(left) }
             if let right = controllerPoses.right { envelope["controller.pose.right"] = poseString(right) }
+        }
+        if grippers.isActive {
+            envelope["gripper.control.version"] = "1"
+            envelope["gripper.left.closed"] = grippers.leftClosed ? "1" : "0"
+            envelope["gripper.right.closed"] = grippers.rightClosed ? "1" : "0"
         }
         let data = try NSKeyedArchiver.archivedData(
             withRootObject: envelope,

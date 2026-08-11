@@ -32,6 +32,7 @@ final class RobotViewModel {
     var speedLimit: Float = 0.65
 
     let gameController: GameControllerInput
+    let headOrientation: HeadOrientationInput
     let videoPipeline: VideoPipelineCoordinator
 
     @ObservationIgnored private let session: RobotSession
@@ -47,6 +48,8 @@ final class RobotViewModel {
     @ObservationIgnored private var activeVideoDescriptor: VideoStreamDescriptor?
     @ObservationIgnored private var sceneIsActive = false
     @ObservationIgnored private var inputSequence: UInt64 = 0
+    @ObservationIgnored private var latestGameControllerSample = GameControllerSample.disconnected
+    @ObservationIgnored private var latestHeadOrientation = HeadOrientationSample.unavailable
 
     init(
         session: RobotSession = RobotSession(),
@@ -61,8 +64,12 @@ final class RobotViewModel {
         self.videoPipeline = videoPipeline
         self.pairingStore = pairingStore
         self.gameController = GameControllerInput()
+        self.headOrientation = HeadOrientationInput()
         self.gameController.onSample = { [weak self] sample in
             self?.acceptGameController(sample)
+        }
+        self.headOrientation.onSample = { [weak self] sample in
+            self?.acceptHeadOrientation(sample)
         }
         reloadPairingStatus(selectCerebroWhenPaired: true)
     }
@@ -78,6 +85,7 @@ final class RobotViewModel {
     func start() {
         guard updatesTask == nil else { return }
         gameController.start()
+        headOrientation.start()
         let session = session
         updatesTask = Task { [weak self] in
             let updates = await session.updates()
@@ -105,6 +113,7 @@ final class RobotViewModel {
         endVirtualMotion()
         stopVideoPipeline()
         gameController.stop()
+        headOrientation.stop()
         let session = session
         Task {
             await session.disconnect()
@@ -464,6 +473,8 @@ final class RobotViewModel {
 
     private func acceptGameController(_ sample: GameControllerSample) {
         guard sceneIsActive else { return }
+        latestGameControllerSample = sample
+        headOrientation.setDeadManHeld(sample.isConnected && sample.deadManIsHeld)
         guard sample.isConnected else {
             let session = session
             Task {
@@ -472,6 +483,18 @@ final class RobotViewModel {
             return
         }
 
+        sendCombinedControllerSample()
+    }
+
+    private func acceptHeadOrientation(_ sample: HeadOrientationSample) {
+        latestHeadOrientation = sample
+        guard sceneIsActive, latestGameControllerSample.isConnected,
+              latestGameControllerSample.deadManIsHeld else { return }
+        sendCombinedControllerSample()
+    }
+
+    private func sendCombinedControllerSample() {
+        let sample = latestGameControllerSample
         inputSequence &+= 1
         // The two controller sticks are direct tread demands. Convert to the protocol's
         // linear/angular representation without losing either independent floating-point value.
@@ -482,8 +505,11 @@ final class RobotViewModel {
             source: .gameController,
             linear: linear * speedLimit,
             angular: angular * speedLimit,
-            cameraPan: sample.cameraPan,
-            cameraTilt: sample.cameraTilt,
+            cameraPan: latestHeadOrientation.pan,
+            cameraTilt: latestHeadOrientation.tilt,
+            cameraControlIsActive: sample.deadManIsHeld && latestHeadOrientation.isTracked,
+            leftGripperClosed: sample.leftGripperClosed,
+            rightGripperClosed: sample.rightGripperClosed,
             controllerPoses: sample.controllerPoses,
             deadManIsHeld: sample.deadManIsHeld
         )

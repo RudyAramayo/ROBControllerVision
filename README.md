@@ -83,6 +83,20 @@ Motion is inhibited by default. The operator must connect, arm motion, and conti
 
 The simulator independently enforces a receive-side watchdog. Cerebro remains the authoritative real-robot receiver and must independently stop on stale or disconnected controller input; an app-only dead-man cannot stop a robot after total network loss. The software stop control supplements and never replaces a physical, independently wired emergency stop.
 
+While a game-controller dead-man is held, ROBControllerVision also recenters on
+the current Vision Pro head pose and sends bounded relative yaw and pitch as the
+camera-neck demand. Releasing the dead-man, losing device-anchor tracking, leaving
+the active scene, or disconnecting stops publishing neck demands. Cerebro applies
+them only from its fresh master-controller snapshot and mirrors the accepted
+pan/tilt on its SceneKit diagnostic robot.
+
+PSVR Sense index triggers are reserved for the matching Amber grippers: pressed
+requests closed and released requests open. Both VR grip buttons must remain held
+as the continuous dead-man gesture, and the app's **Arm Motion** control must also
+be unlocked. A conventional gamepad uses A or both shoulder buttons for the
+continuous hold. Cerebro emits gripper operations only on state transitions and
+labels them as commanded rather than measured feedback.
+
 On visionOS, game-controller delivery depends on the app receiving controller events. Missing fresh callbacks are treated as expired input instead of replaying a retained thumbstick value. Validate controller delivery, gaze/focus behavior, the Cerebro watchdog, and the physical stop on the target hardware before real-robot use.
 
 ## Network and video implementation

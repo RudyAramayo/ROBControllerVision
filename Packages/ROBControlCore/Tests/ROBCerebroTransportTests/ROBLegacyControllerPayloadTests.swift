@@ -46,6 +46,41 @@ struct ROBLegacyControllerPayloadTests {
         #expect(message.contains("touchPadL - 0.000000,-1000.000000"))
         #expect(message.contains("touchPadR - 0.000000,-1000.000000"))
         #expect(message.contains("tredBrakeLock=1"))
+        #expect(message.contains("roll=0.000000"))
+    }
+
+    @Test("Active head orientation is bounded and marked dead-man active")
+    func activeHeadOrientation() throws {
+        let data = try ROBLegacyControllerPayload.controllerSnapshot(
+            motion: .stopped,
+            camera: CameraVector(pan: 0.25, tilt: -0.5, isActive: true),
+            senderID: UUID(),
+            brakeIsLocked: false,
+            neckControlActive: true
+        )
+        let envelope = try #require(try decode(data))
+        let message = try #require(envelope["message"] as? String)
+        #expect(message.contains("yaw=0.250000"))
+        #expect(message.contains("pitch=-0.500000"))
+        #expect(message.contains("roll=1.000000"))
+    }
+
+    @Test("Active gripper triggers are explicit and absent from stopped snapshots")
+    func activeGripperTriggers() throws {
+        let data = try ROBLegacyControllerPayload.controllerSnapshot(
+            motion: .stopped,
+            grippers: GripperVector(leftClosed: true, rightClosed: false, isActive: true),
+            senderID: UUID(),
+            brakeIsLocked: false
+        )
+        let envelope = try #require(try decode(data))
+        #expect(envelope["gripper.control.version"] as? String == "1")
+        #expect(envelope["gripper.left.closed"] as? String == "1")
+        #expect(envelope["gripper.right.closed"] as? String == "0")
+
+        let stopped = try ROBLegacyControllerPayload.stoppedSnapshot(senderID: UUID())
+        let stoppedEnvelope = try #require(try decode(stopped))
+        #expect(stoppedEnvelope["gripper.control.version"] == nil)
     }
 
     @Test("Stopped snapshots retain pose diagnostics while motion stays braked")

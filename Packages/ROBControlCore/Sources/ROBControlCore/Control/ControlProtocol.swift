@@ -41,12 +41,43 @@ public struct MotionVector: Codable, Hashable, Sendable {
     }
 }
 
+public struct CameraVector: Codable, Hashable, Sendable {
+    public var pan: Float
+    public var tilt: Float
+    public var isActive: Bool
+
+    public init(pan: Float = 0, tilt: Float = 0, isActive: Bool = false) {
+        self.pan = pan.isFinite ? max(-1, min(1, pan)) : 0
+        self.tilt = tilt.isFinite ? max(-1, min(1, tilt)) : 0
+        self.isActive = isActive
+    }
+
+    public static let centered = CameraVector()
+}
+
+public struct GripperVector: Codable, Hashable, Sendable {
+    public var leftClosed: Bool
+    public var rightClosed: Bool
+    public var isActive: Bool
+
+    public init(leftClosed: Bool = false, rightClosed: Bool = false, isActive: Bool = false) {
+        self.leftClosed = leftClosed
+        self.rightClosed = rightClosed
+        self.isActive = isActive
+    }
+
+    public static let inactive = GripperVector()
+}
+
 public struct OperatorControlSample: Equatable, Sendable {
     public let sequence: UInt64
     public let source: ControlInputSource
     public let motion: MotionVector
     public let cameraPan: Float
     public let cameraTilt: Float
+    public let cameraControlIsActive: Bool
+    public let leftGripperClosed: Bool
+    public let rightGripperClosed: Bool
     public let deadManIsHeld: Bool
     public let controllerPoses: ControllerPosePair?
 
@@ -57,6 +88,9 @@ public struct OperatorControlSample: Equatable, Sendable {
         angular: Float,
         cameraPan: Float = 0,
         cameraTilt: Float = 0,
+        cameraControlIsActive: Bool = false,
+        leftGripperClosed: Bool = false,
+        rightGripperClosed: Bool = false,
         controllerPoses: ControllerPosePair? = nil,
         deadManIsHeld: Bool
     ) {
@@ -65,6 +99,9 @@ public struct OperatorControlSample: Equatable, Sendable {
         self.motion = MotionVector(linear: linear, angular: angular)
         self.cameraPan = cameraPan.isFinite ? max(-1, min(1, cameraPan)) : 0
         self.cameraTilt = cameraTilt.isFinite ? max(-1, min(1, cameraTilt)) : 0
+        self.cameraControlIsActive = cameraControlIsActive
+        self.leftGripperClosed = leftGripperClosed
+        self.rightGripperClosed = rightGripperClosed
         self.controllerPoses = controllerPoses
         self.deadManIsHeld = deadManIsHeld
     }
@@ -142,7 +179,12 @@ public enum MotionInhibitReason: String, Codable, Hashable, Sendable {
 
 public enum RobotCommand: Hashable, Sendable {
     case setArmed(Bool)
-    case drive(MotionVector, ControllerPosePair? = nil)
+    case drive(
+        MotionVector,
+        CameraVector = .centered,
+        GripperVector = .inactive,
+        ControllerPosePair? = nil
+    )
     case stop(MotionInhibitReason, ControllerPosePair? = nil)
     case emergencyStop
     case resetEmergencyStop
@@ -193,6 +235,8 @@ extension RobotCommand: Codable {
         case reason
         case video
         case controllerPoses
+        case camera
+        case grippers
     }
 
     private enum Kind: String, Codable {
@@ -212,6 +256,8 @@ extension RobotCommand: Codable {
         case .drive:
             self = .drive(
                 try container.decode(MotionVector.self, forKey: .motion),
+                try container.decodeIfPresent(CameraVector.self, forKey: .camera) ?? .centered,
+                try container.decodeIfPresent(GripperVector.self, forKey: .grippers) ?? .inactive,
                 try container.decodeIfPresent(ControllerPosePair.self, forKey: .controllerPoses)
             )
         case .stop:
@@ -234,9 +280,11 @@ extension RobotCommand: Codable {
         case .setArmed(let armed):
             try container.encode(Kind.setArmed, forKey: .type)
             try container.encode(armed, forKey: .armed)
-        case .drive(let motion, let controllerPoses):
+        case .drive(let motion, let camera, let grippers, let controllerPoses):
             try container.encode(Kind.drive, forKey: .type)
             try container.encode(motion, forKey: .motion)
+            try container.encode(camera, forKey: .camera)
+            try container.encode(grippers, forKey: .grippers)
             try container.encodeIfPresent(controllerPoses, forKey: .controllerPoses)
         case .stop(let reason, let controllerPoses):
             try container.encode(Kind.stop, forKey: .type)

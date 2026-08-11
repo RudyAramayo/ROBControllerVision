@@ -10,7 +10,7 @@ public struct DeadManController: Sendable {
     }
 
     public enum Decision: Equatable, Sendable {
-        case drive(MotionVector, ControllerPosePair?)
+        case drive(MotionVector, CameraVector, GripperVector, ControllerPosePair?)
         case stop(MotionInhibitReason, ControllerPosePair? = nil)
     }
 
@@ -106,6 +106,19 @@ public struct DeadManController: Sendable {
         guard latestInputAt.duration(to: instant) < configuration.inputTimeout else {
             return .stop(.inputExpired, diagnosticPoses)
         }
-        return .drive(latestInput.motion, latestInput.controllerPoses)
+        return .drive(
+            latestInput.motion,
+            CameraVector(
+                pan: latestInput.cameraPan,
+                tilt: latestInput.cameraTilt,
+                isActive: latestInput.cameraControlIsActive
+            ),
+            GripperVector(
+                leftClosed: latestInput.leftGripperClosed,
+                rightClosed: latestInput.rightGripperClosed,
+                isActive: latestInput.deadManIsHeld
+            ),
+            latestInput.controllerPoses
+        )
     }
 }
