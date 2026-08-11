@@ -5,9 +5,10 @@ import simd
 struct HeadOrientationSample: Sendable {
     let pan: Float
     let tilt: Float
+    let torsoRotation: Float
     let isTracked: Bool
 
-    static let unavailable = HeadOrientationSample(pan: 0, tilt: 0, isTracked: false)
+    static let unavailable = HeadOrientationSample(pan: 0, tilt: 0, torsoRotation: 0, isTracked: false)
 }
 
 /// Converts the Vision Pro device anchor into a bounded orientation relative to
@@ -72,7 +73,7 @@ final class HeadOrientationInput {
         let orientation = simd_quatf(anchor.originFromAnchorTransform)
         guard let baseline else {
             self.baseline = orientation
-            onSample?(HeadOrientationSample(pan: 0, tilt: 0, isTracked: true))
+            onSample?(HeadOrientationSample(pan: 0, tilt: 0, torsoRotation: 0, isTracked: true))
             return
         }
 
@@ -82,9 +83,15 @@ final class HeadOrientationInput {
         let pitch = asin(max(-1, min(1, forward.y)))
         let maximumYaw = Float.pi / 3       // 60 degrees maps to full pan.
         let maximumPitch = Float.pi * 35 / 180
+        // Let the camera-neck servos handle ordinary looking. The rotating Tic
+        // plate begins following only after the operator turns beyond the neck's
+        // 60-degree range, reaching full normalized travel at 180 degrees.
+        let torsoExcessYaw = max(0, abs(yaw) - maximumYaw)
+        let torsoRotation = (yaw < 0 ? -1 : 1) * torsoExcessYaw / (Float.pi - maximumYaw)
         onSample?(HeadOrientationSample(
             pan: max(-1, min(1, yaw / maximumYaw)),
             tilt: max(-1, min(1, pitch / maximumPitch)),
+            torsoRotation: max(-1, min(1, torsoRotation)),
             isTracked: true
         ))
     }

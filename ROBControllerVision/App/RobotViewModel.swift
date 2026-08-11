@@ -510,6 +510,7 @@ final class RobotViewModel {
             cameraControlIsActive: sample.deadManIsHeld && latestHeadOrientation.isTracked,
             leftGripperClosed: sample.leftGripperClosed,
             rightGripperClosed: sample.rightGripperClosed,
+            torsoRotation: latestHeadOrientation.torsoRotation,
             controllerPoses: sample.controllerPoses,
             deadManIsHeld: sample.deadManIsHeld
         )

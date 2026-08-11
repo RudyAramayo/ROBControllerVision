@@ -97,6 +97,11 @@ be unlocked. A conventional gamepad uses A or both shoulder buttons for the
 continuous hold. Cerebro emits gripper operations only on state transitions and
 labels them as commanded rather than measured feedback.
 
+With the same dead-man hold, Vision Pro yaw beyond the camera neck's 60-degree
+range produces a bounded rotating-torso demand. Cerebro owns the Pololu Tic USB
+safety sequence and position conversion; ROBControllerVision never sends shell
+commands or confuses this rotating plate with ROB's separate lean LACT.
+
 On visionOS, game-controller delivery depends on the app receiving controller events. Missing fresh callbacks are treated as expired input instead of replaying a retained thumbstick value. Validate controller delivery, gaze/focus behavior, the Cerebro watchdog, and the physical stop on the target hardware before real-robot use.
 
 ## Network and video implementation

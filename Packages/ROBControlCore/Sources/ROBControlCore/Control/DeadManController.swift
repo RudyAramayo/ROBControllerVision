@@ -10,7 +10,7 @@ public struct DeadManController: Sendable {
     }
 
     public enum Decision: Equatable, Sendable {
-        case drive(MotionVector, CameraVector, GripperVector, ControllerPosePair?)
+        case drive(MotionVector, CameraVector, GripperVector, TorsoVector, ControllerPosePair?)
         case stop(MotionInhibitReason, ControllerPosePair? = nil)
     }
 
@@ -117,6 +117,10 @@ public struct DeadManController: Sendable {
                 leftClosed: latestInput.leftGripperClosed,
                 rightClosed: latestInput.rightGripperClosed,
                 isActive: latestInput.deadManIsHeld
+            ),
+            TorsoVector(
+                rotation: latestInput.torsoRotation,
+                isActive: latestInput.deadManIsHeld && latestInput.cameraControlIsActive
             ),
             latestInput.controllerPoses
         )

@@ -69,6 +69,18 @@ public struct GripperVector: Codable, Hashable, Sendable {
     public static let inactive = GripperVector()
 }
 
+public struct TorsoVector: Codable, Hashable, Sendable {
+    public var rotation: Float
+    public var isActive: Bool
+
+    public init(rotation: Float = 0, isActive: Bool = false) {
+        self.rotation = rotation.isFinite ? max(-1, min(1, rotation)) : 0
+        self.isActive = isActive
+    }
+
+    public static let inactive = TorsoVector()
+}
+
 public struct OperatorControlSample: Equatable, Sendable {
     public let sequence: UInt64
     public let source: ControlInputSource
@@ -78,6 +90,7 @@ public struct OperatorControlSample: Equatable, Sendable {
     public let cameraControlIsActive: Bool
     public let leftGripperClosed: Bool
     public let rightGripperClosed: Bool
+    public let torsoRotation: Float
     public let deadManIsHeld: Bool
     public let controllerPoses: ControllerPosePair?
 
@@ -91,6 +104,7 @@ public struct OperatorControlSample: Equatable, Sendable {
         cameraControlIsActive: Bool = false,
         leftGripperClosed: Bool = false,
         rightGripperClosed: Bool = false,
+        torsoRotation: Float = 0,
         controllerPoses: ControllerPosePair? = nil,
         deadManIsHeld: Bool
     ) {
@@ -102,6 +116,7 @@ public struct OperatorControlSample: Equatable, Sendable {
         self.cameraControlIsActive = cameraControlIsActive
         self.leftGripperClosed = leftGripperClosed
         self.rightGripperClosed = rightGripperClosed
+        self.torsoRotation = torsoRotation.isFinite ? max(-1, min(1, torsoRotation)) : 0
         self.controllerPoses = controllerPoses
         self.deadManIsHeld = deadManIsHeld
     }
@@ -183,6 +198,7 @@ public enum RobotCommand: Hashable, Sendable {
         MotionVector,
         CameraVector = .centered,
         GripperVector = .inactive,
+        TorsoVector = .inactive,
         ControllerPosePair? = nil
     )
     case stop(MotionInhibitReason, ControllerPosePair? = nil)
@@ -237,6 +253,7 @@ extension RobotCommand: Codable {
         case controllerPoses
         case camera
         case grippers
+        case torso
     }
 
     private enum Kind: String, Codable {
@@ -258,6 +275,7 @@ extension RobotCommand: Codable {
                 try container.decode(MotionVector.self, forKey: .motion),
                 try container.decodeIfPresent(CameraVector.self, forKey: .camera) ?? .centered,
                 try container.decodeIfPresent(GripperVector.self, forKey: .grippers) ?? .inactive,
+                try container.decodeIfPresent(TorsoVector.self, forKey: .torso) ?? .inactive,
                 try container.decodeIfPresent(ControllerPosePair.self, forKey: .controllerPoses)
             )
         case .stop:
@@ -280,11 +298,12 @@ extension RobotCommand: Codable {
         case .setArmed(let armed):
             try container.encode(Kind.setArmed, forKey: .type)
             try container.encode(armed, forKey: .armed)
-        case .drive(let motion, let camera, let grippers, let controllerPoses):
+        case .drive(let motion, let camera, let grippers, let torso, let controllerPoses):
             try container.encode(Kind.drive, forKey: .type)
             try container.encode(motion, forKey: .motion)
             try container.encode(camera, forKey: .camera)
             try container.encode(grippers, forKey: .grippers)
+            try container.encode(torso, forKey: .torso)
             try container.encodeIfPresent(controllerPoses, forKey: .controllerPoses)
         case .stop(let reason, let controllerPoses):
             try container.encode(Kind.stop, forKey: .type)

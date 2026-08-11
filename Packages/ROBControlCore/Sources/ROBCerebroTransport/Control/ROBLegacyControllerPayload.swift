@@ -21,6 +21,7 @@ enum ROBLegacyControllerPayload {
         motion: MotionVector,
         camera: CameraVector = .centered,
         grippers: GripperVector = .inactive,
+        torso: TorsoVector = .inactive,
         senderID: UUID,
         brakeIsLocked: Bool,
         neckControlActive: Bool = false,
@@ -62,7 +63,8 @@ enum ROBLegacyControllerPayload {
             message: message,
             senderID: senderID,
             controllerPoses: controllerPoses,
-            grippers: grippers
+            grippers: grippers,
+            torso: torso
         )
     }
 
@@ -85,7 +87,8 @@ enum ROBLegacyControllerPayload {
         message: String,
         senderID: UUID,
         controllerPoses: ControllerPosePair? = nil,
-        grippers: GripperVector = .inactive
+        grippers: GripperVector = .inactive,
+        torso: TorsoVector = .inactive
     ) throws -> Data {
         let envelope = NSMutableDictionary(dictionary: [
             "message": message,
@@ -100,6 +103,12 @@ enum ROBLegacyControllerPayload {
             envelope["gripper.control.version"] = "1"
             envelope["gripper.left.closed"] = grippers.leftClosed ? "1" : "0"
             envelope["gripper.right.closed"] = grippers.rightClosed ? "1" : "0"
+        }
+        if torso.isActive {
+            envelope["torso.control.version"] = "1"
+            envelope["torso.rotation.normalized"] = String(
+                format: "%.6f", locale: posixLocale, torso.rotation
+            )
         }
         let data = try NSKeyedArchiver.archivedData(
             withRootObject: envelope,

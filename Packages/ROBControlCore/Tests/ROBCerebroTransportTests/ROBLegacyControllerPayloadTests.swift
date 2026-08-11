@@ -83,6 +83,23 @@ struct ROBLegacyControllerPayloadTests {
         #expect(stoppedEnvelope["gripper.control.version"] == nil)
     }
 
+    @Test("Dead-man torso rotation is versioned beside the legacy snapshot")
+    func activeTorsoRotation() throws {
+        let data = try ROBLegacyControllerPayload.controllerSnapshot(
+            motion: .stopped,
+            torso: TorsoVector(rotation: -0.375, isActive: true),
+            senderID: UUID(),
+            brakeIsLocked: false
+        )
+        let envelope = try #require(try decode(data))
+        #expect(envelope["torso.control.version"] as? String == "1")
+        #expect(envelope["torso.rotation.normalized"] as? String == "-0.375000")
+
+        let stopped = try ROBLegacyControllerPayload.stoppedSnapshot(senderID: UUID())
+        let stoppedEnvelope = try #require(try decode(stopped))
+        #expect(stoppedEnvelope["torso.control.version"] == nil)
+    }
+
     @Test("Stopped snapshots retain pose diagnostics while motion stays braked")
     func stoppedSnapshotWithPoseDiagnostics() throws {
         let left = try #require(ControllerPose(
