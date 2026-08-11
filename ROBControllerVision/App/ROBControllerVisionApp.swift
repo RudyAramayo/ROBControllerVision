@@ -13,6 +13,6 @@ struct ROBControllerVisionApp: App {
                     model.setSceneActive(newPhase == .active)
                 }
         }
-        .defaultSize(width: 1_180, height: 760)
+        .defaultSize(width: 1_520, height: 1_080)
     }
 }

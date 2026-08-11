@@ -432,10 +432,10 @@ public actor RobotSession {
 
         let decision = deadMan.evaluate(connectionIsReady: true)
         switch decision {
-        case .drive(let motion):
+        case .drive(let motion, let controllerPoses):
             synchronizeSafetyState(inhibitReason: nil)
             do {
-                try await send(.drive(motion))
+                try await send(.drive(motion, controllerPoses))
             } catch {
                 handleSendFailure(error)
             }

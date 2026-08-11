@@ -48,6 +48,7 @@ public struct OperatorControlSample: Equatable, Sendable {
     public let cameraPan: Float
     public let cameraTilt: Float
     public let deadManIsHeld: Bool
+    public let controllerPoses: ControllerPosePair?
 
     public init(
         sequence: UInt64,
@@ -56,6 +57,7 @@ public struct OperatorControlSample: Equatable, Sendable {
         angular: Float,
         cameraPan: Float = 0,
         cameraTilt: Float = 0,
+        controllerPoses: ControllerPosePair? = nil,
         deadManIsHeld: Bool
     ) {
         self.sequence = sequence
@@ -63,8 +65,51 @@ public struct OperatorControlSample: Equatable, Sendable {
         self.motion = MotionVector(linear: linear, angular: angular)
         self.cameraPan = cameraPan.isFinite ? max(-1, min(1, cameraPan)) : 0
         self.cameraTilt = cameraTilt.isFinite ? max(-1, min(1, cameraTilt)) : 0
+        self.controllerPoses = controllerPoses
         self.deadManIsHeld = deadManIsHeld
     }
+}
+
+public struct ControllerPose: Codable, Equatable, Hashable, Sendable {
+    public let x: Float
+    public let y: Float
+    public let z: Float
+    public let qx: Float
+    public let qy: Float
+    public let qz: Float
+    public let qw: Float
+    public let timestamp: TimeInterval
+
+    public init?(
+        x: Float, y: Float, z: Float,
+        qx: Float, qy: Float, qz: Float, qw: Float,
+        timestamp: TimeInterval
+    ) {
+        let values = [x, y, z, qx, qy, qz, qw]
+        guard values.allSatisfy(\.isFinite), timestamp.isFinite, timestamp >= 0 else { return nil }
+        let quaternionMagnitude = sqrt(qx * qx + qy * qy + qz * qz + qw * qw)
+        guard quaternionMagnitude > 0.5, quaternionMagnitude < 1.5 else { return nil }
+        self.x = x
+        self.y = y
+        self.z = z
+        self.qx = qx / quaternionMagnitude
+        self.qy = qy / quaternionMagnitude
+        self.qz = qz / quaternionMagnitude
+        self.qw = qw / quaternionMagnitude
+        self.timestamp = timestamp
+    }
+}
+
+public struct ControllerPosePair: Codable, Equatable, Hashable, Sendable {
+    public let left: ControllerPose?
+    public let right: ControllerPose?
+
+    public init(left: ControllerPose? = nil, right: ControllerPose? = nil) {
+        self.left = left
+        self.right = right
+    }
+
+    public var isEmpty: Bool { left == nil && right == nil }
 }
 
 public enum MotionInhibitReason: String, Codable, Hashable, Sendable {
@@ -97,7 +142,7 @@ public enum MotionInhibitReason: String, Codable, Hashable, Sendable {
 
 public enum RobotCommand: Hashable, Sendable {
     case setArmed(Bool)
-    case drive(MotionVector)
+    case drive(MotionVector, ControllerPosePair? = nil)
     case stop(MotionInhibitReason)
     case emergencyStop
     case resetEmergencyStop
@@ -147,6 +192,7 @@ extension RobotCommand: Codable {
         case motion
         case reason
         case video
+        case controllerPoses
     }
 
     private enum Kind: String, Codable {
@@ -164,7 +210,10 @@ extension RobotCommand: Codable {
         case .setArmed:
             self = .setArmed(try container.decode(Bool.self, forKey: .armed))
         case .drive:
-            self = .drive(try container.decode(MotionVector.self, forKey: .motion))
+            self = .drive(
+                try container.decode(MotionVector.self, forKey: .motion),
+                try container.decodeIfPresent(ControllerPosePair.self, forKey: .controllerPoses)
+            )
         case .stop:
             self = .stop(try container.decode(MotionInhibitReason.self, forKey: .reason))
         case .emergencyStop:
@@ -182,9 +231,10 @@ extension RobotCommand: Codable {
         case .setArmed(let armed):
             try container.encode(Kind.setArmed, forKey: .type)
             try container.encode(armed, forKey: .armed)
-        case .drive(let motion):
+        case .drive(let motion, let controllerPoses):
             try container.encode(Kind.drive, forKey: .type)
             try container.encode(motion, forKey: .motion)
+            try container.encodeIfPresent(controllerPoses, forKey: .controllerPoses)
         case .stop(let reason):
             try container.encode(Kind.stop, forKey: .type)
             try container.encode(reason, forKey: .reason)

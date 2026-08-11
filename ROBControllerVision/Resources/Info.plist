@@ -23,6 +23,19 @@
 		<string>_robctl._udp</string>
 		<string>_robvideo._udp</string>
 	</array>
+	<key>GCSupportedGameControllers</key>
+	<array>
+		<dict>
+			<key>ProfileName</key>
+			<string>SpatialGamepad</string>
+		</dict>
+		<dict>
+			<key>ProfileName</key>
+			<string>ExtendedGamepad</string>
+		</dict>
+	</array>
+	<key>NSAccessoryTrackingUsageDescription</key>
+	<string>ROB Controller tracks the position and orientation of spatial controllers to provide supervised robotic-arm input.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>ROB Controller discovers and securely connects to robots on your local network.</string>
 	<key>UIApplicationSceneManifest</key>

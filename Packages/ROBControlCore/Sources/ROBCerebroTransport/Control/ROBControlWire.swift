@@ -12,6 +12,7 @@ enum ROBControlWireMessageType: UInt32, Sendable {
     case pairingAccepted = 5
     case pairingRejected = 6
     case lidarTelemetry = 7
+    case pairingHello = 8
 }
 
 struct ROBControlAuthChallenge: Equatable, Sendable {

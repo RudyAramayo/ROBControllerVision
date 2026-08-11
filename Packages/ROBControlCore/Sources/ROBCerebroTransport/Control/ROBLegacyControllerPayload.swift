@@ -20,7 +20,8 @@ enum ROBLegacyControllerPayload {
     static func controllerSnapshot(
         motion: MotionVector,
         senderID: UUID,
-        brakeIsLocked: Bool
+        brakeIsLocked: Bool,
+        controllerPoses: ControllerPosePair? = nil
     ) throws -> Data {
         let left: Float
         let right: Float
@@ -28,16 +29,13 @@ enum ROBLegacyControllerPayload {
             left = -1_000
             right = -1_000
         } else {
-            // Cerebro's tread bridge treats joystick magnitude 0.5 as full scale. Normalize the
-            // arcade-drive mix back to the strongest requested axis before applying that scale;
-            // otherwise simultaneous drive and turn inputs can exceed the UI's speed limit.
+            // Cerebro consumes the two tread values independently as floating-point joystick
+            // positions, where magnitude 0.5 is full scale. Do not normalize one tread against
+            // the other: tank steering intentionally permits distinct simultaneous values.
             let rawLeft = motion.linear + motion.angular
             let rawRight = motion.linear - motion.angular
-            let requestedMagnitude = max(abs(motion.linear), abs(motion.angular))
-            let mixedMagnitude = max(abs(rawLeft), abs(rawRight))
-            let normalization = mixedMagnitude > 0 ? requestedMagnitude / mixedMagnitude : 0
-            left = max(-0.5, min(0.5, rawLeft * normalization * 0.5))
-            right = max(-0.5, min(0.5, rawRight * normalization * 0.5))
+            left = max(-0.5, min(0.5, rawLeft * 0.5))
+            right = max(-0.5, min(0.5, rawRight * 0.5))
         }
 
         let message = [
@@ -57,7 +55,7 @@ enum ROBLegacyControllerPayload {
             "TEXT=",
         ].joined(separator: "\n")
 
-        return try archive(message: message, senderID: senderID)
+        return try archive(message: message, senderID: senderID, controllerPoses: controllerPoses)
     }
 
     static func stoppedSnapshot(senderID: UUID) throws -> Data {
@@ -66,11 +64,20 @@ enum ROBLegacyControllerPayload {
 
     private static let posixLocale = Locale(identifier: "en_US_POSIX")
 
-    private static func archive(message: String, senderID: UUID) throws -> Data {
-        let envelope: NSDictionary = [
+    private static func archive(
+        message: String,
+        senderID: UUID,
+        controllerPoses: ControllerPosePair? = nil
+    ) throws -> Data {
+        let envelope = NSMutableDictionary(dictionary: [
             "message": message,
             "sender": senderID.uuidString.lowercased(),
-        ]
+        ])
+        if let controllerPoses, !controllerPoses.isEmpty {
+            envelope["controller.pose.version"] = "1"
+            if let left = controllerPoses.left { envelope["controller.pose.left"] = poseString(left) }
+            if let right = controllerPoses.right { envelope["controller.pose.right"] = poseString(right) }
+        }
         let data = try NSKeyedArchiver.archivedData(
             withRootObject: envelope,
             requiringSecureCoding: true
@@ -79,5 +86,13 @@ enum ROBLegacyControllerPayload {
             throw ROBCerebroTransportError.invalidApplicationPayload
         }
         return data
+    }
+
+    private static func poseString(_ pose: ControllerPose) -> String {
+        String(
+            format: "%.6f,%.6f,%.6f,%.7f,%.7f,%.7f,%.7f,%.6f",
+            locale: posixLocale,
+            pose.x, pose.y, pose.z, pose.qx, pose.qy, pose.qz, pose.qw, pose.timestamp
+        )
     }
 }

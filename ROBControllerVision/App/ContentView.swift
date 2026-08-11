@@ -8,19 +8,19 @@ struct ContentView: View {
         VStack(spacing: 18) {
             ConnectionStatusView(model: model)
 
-            HStack(alignment: .top, spacing: 20) {
-                VStack(spacing: 20) {
-                    VideoPanel(model: model)
-                    TelemetryPanel(snapshot: model.snapshot)
-                }
+            VideoPanel(model: model)
                 .frame(maxWidth: .infinity)
 
+            HStack(alignment: .top, spacing: 20) {
                 ControlPanel(model: model)
-                    .frame(width: 360)
+                    .frame(width: 480)
+
+                TelemetryPanel(snapshot: model.snapshot)
+                    .frame(maxWidth: .infinity)
             }
         }
         .padding(24)
-        .frame(minWidth: 960, minHeight: 640)
+        .frame(minWidth: 1_280, minHeight: 900)
         .handlesGameControllerEvents(matching: .gamepad)
         .task {
             model.start()

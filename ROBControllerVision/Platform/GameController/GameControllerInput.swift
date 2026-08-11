@@ -1,21 +1,26 @@
+import ARKit
 import Foundation
-import GameController
+@preconcurrency import GameController
 import Observation
+import ROBControlCore
+import simd
 
 struct GameControllerSample: Equatable, Sendable {
     var isConnected: Bool
-    var linear: Float
-    var angular: Float
+    var leftTread: Float
+    var rightTread: Float
     var cameraPan: Float
     var cameraTilt: Float
+    var controllerPoses: ControllerPosePair?
     var deadManIsHeld: Bool
 
     static let disconnected = GameControllerSample(
         isConnected: false,
-        linear: 0,
-        angular: 0,
+        leftTread: 0,
+        rightTread: 0,
         cameraPan: 0,
         cameraTilt: 0,
+        controllerPoses: nil,
         deadManIsHeld: false
     )
 }
@@ -23,15 +28,35 @@ struct GameControllerSample: Equatable, Sendable {
 @MainActor
 @Observable
 final class GameControllerInput: NSObject {
+    private enum TreadSide {
+        case left
+        case right
+        case both
+    }
+
+    private struct ControllerState {
+        var side: TreadSide
+        var stickY: Float = 0
+        var secondStickY: Float = 0
+        var cameraPan: Float = 0
+        var cameraTilt: Float = 0
+        var pose: ControllerPose?
+        var deadManIsHeld = false
+    }
+
     private(set) var isConnected = false
     private(set) var controllerName = "No game controller"
     private(set) var deadManIsHeld = false
+    private(set) var leftTread: Float = 0
+    private(set) var rightTread: Float = 0
     private(set) var lastEventDescription = "Hold A or the right trigger to drive"
 
     @ObservationIgnored var onSample: ((GameControllerSample) -> Void)?
-    @ObservationIgnored private var activeController: GCController?
+    @ObservationIgnored private var controllers: [ObjectIdentifier: GCController] = [:]
+    @ObservationIgnored private var controllerStates: [ObjectIdentifier: ControllerState] = [:]
     @ObservationIgnored private var isStarted = false
     @ObservationIgnored private var physicalInputTask: Task<Void, Never>?
+    @ObservationIgnored private var poseTracker: AnyObject?
     @ObservationIgnored private var lastPhysicalEventTimestamp: TimeInterval = 0
 
     func start() {
@@ -50,7 +75,7 @@ final class GameControllerInput: NSObject {
             object: nil
         )
 
-        if let controller = GCController.controllers().first {
+        for controller in GCController.controllers() {
             configure(controller)
         }
         GCController.startWirelessControllerDiscovery(completionHandler: nil)
@@ -63,8 +88,16 @@ final class GameControllerInput: NSObject {
         GCController.stopWirelessControllerDiscovery()
         physicalInputTask?.cancel()
         physicalInputTask = nil
-        activeController?.extendedGamepad?.valueChangedHandler = nil
-        activeController = nil
+        for controller in controllers.values {
+            controller.extendedGamepad?.valueChangedHandler = nil
+            controller.physicalInputProfile.valueDidChangeHandler = nil
+        }
+        controllers.removeAll()
+        controllerStates.removeAll()
+        if #available(visionOS 26.0, *), let tracker = poseTracker as? ControllerPoseTracker {
+            tracker.stop()
+        }
+        poseTracker = nil
         apply(.disconnected)
     }
 
@@ -74,45 +107,51 @@ final class GameControllerInput: NSObject {
     }
 
     @objc private func controllerDidDisconnect(_ notification: Notification) {
-        guard let controller = notification.object as? GCController,
-            controller === activeController
-        else { return }
-
-        activeController?.extendedGamepad?.valueChangedHandler = nil
-        physicalInputTask?.cancel()
-        physicalInputTask = nil
-        activeController = nil
-        apply(.disconnected)
-
-        if let replacement = GCController.controllers().first {
-            configure(replacement)
-        }
+        guard let controller = notification.object as? GCController else { return }
+        let id = ObjectIdentifier(controller)
+        guard controllers[id] != nil else { return }
+        controller.extendedGamepad?.valueChangedHandler = nil
+        controller.physicalInputProfile.valueDidChangeHandler = nil
+        controllers.removeValue(forKey: id)
+        controllerStates.removeValue(forKey: id)
+        reconfigurePoseTracking()
+        publishCombinedSample()
     }
 
     private func configure(_ controller: GCController) {
-        guard let gamepad = controller.extendedGamepad else {
-            controllerName = "Unsupported controller profile"
-            isConnected = false
+        let id = ObjectIdentifier(controller)
+        guard controllers[id] == nil else { return }
+        let physicalProfile = controller.physicalInputProfile
+        guard controller.extendedGamepad != nil || Self.primaryStick(in: physicalProfile) != nil else {
+            if controllers.isEmpty {
+                controllerName = "Unsupported controller profile"
+                isConnected = false
+            }
             return
         }
 
-        activeController?.extendedGamepad?.valueChangedHandler = nil
-        activeController = controller
-        lastPhysicalEventTimestamp = controller.physicalInputProfile.lastEventTimestamp
-        controllerName = controller.vendorName ?? "Game controller"
-        isConnected = true
-        lastEventDescription = "Hold A or the right trigger to drive"
+        let side = controller.extendedGamepad == nil ? senseSide(for: physicalProfile) : .both
+        controllers[id] = controller
+        controllerStates[id] = ControllerState(side: side)
+        lastPhysicalEventTimestamp = physicalProfile.lastEventTimestamp
+        updateControllerName()
 
-        gamepad.valueChangedHandler = { [weak self] gamepad, _ in
-            let sample = Self.sample(from: gamepad)
-            Task { @MainActor [weak self] in
-                self?.apply(sample)
+        if let gamepad = controller.extendedGamepad {
+            gamepad.valueChangedHandler = { [weak self] gamepad, _ in
+                Task { @MainActor [weak self] in
+                    self?.updateController(id, from: gamepad)
+                }
+            }
+        } else {
+            physicalProfile.valueDidChangeHandler = { [weak self] profile, _ in
+                Task { @MainActor [weak self] in
+                    self?.updateController(id, from: profile)
+                }
             }
         }
 
-        var initialSample = Self.sample(from: gamepad)
-        initialSample.deadManIsHeld = false
-        apply(initialSample)
+        updateController(id, from: controller, allowDeadMan: false)
+        reconfigurePoseTracking()
         startPhysicalInputPolling()
     }
 
@@ -132,30 +171,173 @@ final class GameControllerInput: NSObject {
     }
 
     private func pollPhysicalInput() {
-        guard let controller = activeController,
-            let gamepad = controller.extendedGamepad
-        else { return }
-
-        let eventTimestamp = controller.physicalInputProfile.lastEventTimestamp
-        guard eventTimestamp > lastPhysicalEventTimestamp else { return }
-        lastPhysicalEventTimestamp = eventTimestamp
-        apply(Self.sample(from: gamepad))
+        for (id, controller) in controllers {
+            let eventTimestamp = controller.physicalInputProfile.lastEventTimestamp
+            guard eventTimestamp > lastPhysicalEventTimestamp else { continue }
+            lastPhysicalEventTimestamp = eventTimestamp
+            updateController(id, from: controller)
+        }
     }
 
-    nonisolated private static func sample(from gamepad: GCExtendedGamepad) -> GameControllerSample {
-        GameControllerSample(
-            isConnected: true,
-            linear: gamepad.leftThumbstick.yAxis.value,
-            angular: gamepad.leftThumbstick.xAxis.value,
-            cameraPan: gamepad.rightThumbstick.xAxis.value,
-            cameraTilt: gamepad.rightThumbstick.yAxis.value,
-            deadManIsHeld: gamepad.buttonA.isPressed || gamepad.rightTrigger.value > 0.5
+    private func updateController(
+        _ id: ObjectIdentifier,
+        from controller: GCController,
+        allowDeadMan: Bool = true
+    ) {
+        if let gamepad = controller.extendedGamepad {
+            updateController(id, from: gamepad, allowDeadMan: allowDeadMan)
+        } else {
+            updateController(id, from: controller.physicalInputProfile, allowDeadMan: allowDeadMan)
+        }
+    }
+
+    private func updateController(
+        _ id: ObjectIdentifier,
+        from gamepad: GCExtendedGamepad,
+        allowDeadMan: Bool = true
+    ) {
+        guard var state = controllerStates[id] else { return }
+        // A conventional gamepad keeps ROBController's tank-drive convention: the vertical axis
+        // of each thumbstick controls the corresponding tread.
+        state.side = .both
+        state.stickY = gamepad.leftThumbstick.yAxis.value
+        state.secondStickY = gamepad.rightThumbstick.yAxis.value
+        state.cameraPan = gamepad.rightThumbstick.xAxis.value
+        state.cameraTilt = gamepad.rightThumbstick.yAxis.value
+        state.deadManIsHeld = allowDeadMan
+            && (gamepad.buttonA.isPressed || gamepad.rightTrigger.value > 0.5)
+        controllerStates[id] = state
+        publishCombinedSample()
+    }
+
+    /// PSVR Sense controllers are exposed by visionOS as a physical input profile rather than a
+    /// `GCExtendedGamepad`. The singular names are used by one-handed spatial controllers on
+    /// visionOS 26; the left/right names preserve compatibility with earlier controller mappings.
+    private func updateController(
+        _ id: ObjectIdentifier,
+        from profile: GCPhysicalInputProfile,
+        allowDeadMan: Bool = true
+    ) {
+        guard let primary = Self.primaryStick(in: profile), var state = controllerStates[id] else {
+            return
+        }
+        state.stickY = primary.yAxis.value
+        state.deadManIsHeld = allowDeadMan && (
+            profile.buttons[GCInputButtonA]?.isPressed == true
+            || (profile.buttons[GCInputRightTrigger]?.value ?? 0) > 0.5
+            || (profile.buttons[GCInputLeftTrigger]?.value ?? 0) > 0.5
+            || (profile.buttons["Trigger"]?.value ?? 0) > 0.5
+            || profile.buttons["Grip Button"]?.isPressed == true
         )
+        controllerStates[id] = state
+        publishCombinedSample()
+    }
+
+    private func senseSide(for profile: GCPhysicalInputProfile) -> TreadSide {
+        let hasRightButtons = profile.buttons[GCInputButtonA] != nil || profile.buttons[GCInputButtonB] != nil
+        let hasLeftButtons = profile.buttons[GCInputButtonX] != nil || profile.buttons[GCInputButtonY] != nil
+        if hasRightButtons && !hasLeftButtons { return .right }
+        if hasLeftButtons && !hasRightButtons { return .left }
+        if !controllerStates.values.contains(where: { $0.side == .left }) { return .left }
+        return .right
+    }
+
+    private func publishCombinedSample() {
+        var left: Float = 0
+        var right: Float = 0
+        var cameraPan: Float = 0
+        var cameraTilt: Float = 0
+        for state in controllerStates.values {
+            switch state.side {
+            case .left:
+                left = state.stickY
+            case .right:
+                right = state.stickY
+            case .both:
+                left = state.stickY
+                right = state.secondStickY
+            }
+            cameraPan = state.cameraPan
+            cameraTilt = state.cameraTilt
+        }
+        apply(GameControllerSample(
+            isConnected: !controllerStates.isEmpty,
+            leftTread: left,
+            rightTread: right,
+            cameraPan: cameraPan,
+            cameraTilt: cameraTilt,
+            controllerPoses: posePair(),
+            deadManIsHeld: controllerStates.values.contains(where: \.deadManIsHeld)
+        ))
+        updateControllerName()
+    }
+
+    private func posePair() -> ControllerPosePair? {
+        var left: ControllerPose?
+        var right: ControllerPose?
+        for state in controllerStates.values {
+            switch state.side {
+            case .left: left = state.pose
+            case .right: right = state.pose
+            case .both: break
+            }
+        }
+        let pair = ControllerPosePair(left: left, right: right)
+        return pair.isEmpty ? nil : pair
+    }
+
+    private func reconfigurePoseTracking() {
+        guard #available(visionOS 26.0, *), AccessoryTrackingProvider.isSupported else { return }
+        let tracker: ControllerPoseTracker
+        if let existing = poseTracker as? ControllerPoseTracker {
+            tracker = existing
+        } else {
+            tracker = ControllerPoseTracker()
+            tracker.onPose = { [weak self] chirality, pose in
+                self?.applyTrackedPose(pose, chirality: chirality)
+            }
+            poseTracker = tracker
+        }
+        tracker.track(Array(controllers.values))
+    }
+
+    @available(visionOS 26.0, *)
+    private func applyTrackedPose(_ pose: ControllerPose?, chirality: Accessory.Chirality) {
+        let side: TreadSide
+        switch chirality {
+        case .left: side = .left
+        case .right: side = .right
+        case .unspecified: return
+        @unknown default: return
+        }
+        guard let id = controllerStates.first(where: { $0.value.side == side })?.key,
+            var state = controllerStates[id]
+        else { return }
+        state.pose = pose
+        controllerStates[id] = state
+        publishCombinedSample()
+    }
+
+    private func updateControllerName() {
+        guard !controllers.isEmpty else { return }
+        let names = Set(controllers.values.map { $0.vendorName ?? "Game controller" })
+        let name = names.sorted().joined(separator: " + ")
+        controllerName = controllers.count > 1 ? "\(controllers.count) \(name)s" : name
+    }
+
+    nonisolated private static func primaryStick(
+        in profile: GCPhysicalInputProfile
+    ) -> GCControllerDirectionPad? {
+        profile.dpads[GCInputLeftThumbstick]
+            ?? profile.dpads["Thumbstick"]
+            ?? profile.dpads.first(where: { $0.key != GCInputDirectionPad })?.value
     }
 
     private func apply(_ sample: GameControllerSample) {
         isConnected = sample.isConnected
         deadManIsHeld = sample.deadManIsHeld
+        leftTread = sample.leftTread
+        rightTread = sample.rightTread
         if !sample.isConnected {
             controllerName = "No game controller"
             lastEventDescription = "Connect a compatible controller"
@@ -165,5 +347,80 @@ final class GameControllerInput: NSObject {
             lastEventDescription = "Motion inhibited until dead-man is held"
         }
         onSample?(sample)
+    }
+}
+
+@available(visionOS 26.0, *)
+@MainActor
+private final class ControllerPoseTracker {
+    private struct SendableController: @unchecked Sendable {
+        let value: GCController
+    }
+
+    var onPose: ((Accessory.Chirality, ControllerPose?) -> Void)?
+
+    private var session: ARKitSession?
+    private var trackingTask: Task<Void, Never>?
+
+    func track(_ controllers: [GCController]) {
+        stop()
+        guard !controllers.isEmpty else { return }
+        let sendableControllers = controllers.map(SendableController.init(value:))
+        trackingTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let accessories = try await Task.detached {
+                    var loaded: [Accessory] = []
+                    for controller in sendableControllers {
+                        loaded.append(try await Accessory(device: controller.value))
+                    }
+                    return loaded
+                }.value
+                guard !Task.isCancelled else { return }
+                let provider = AccessoryTrackingProvider(accessories: accessories)
+                let session = ARKitSession()
+                self.session = session
+                try await session.run([provider])
+                for await update in provider.anchorUpdates {
+                    guard !Task.isCancelled else { return }
+                    let anchor = update.anchor
+                    let chirality = anchor.heldChirality ?? anchor.accessory.inherentChirality
+                    guard anchor.isTracked,
+                        anchor.trackingState == .positionOrientationTracked
+                            || anchor.trackingState == .positionOrientationTrackedLowAccuracy
+                    else {
+                        self.onPose?(chirality, nil)
+                        continue
+                    }
+                    let transform = anchor.originFromAnchorTransform
+                    let position = transform.columns.3
+                    let orientation = simd_quatf(transform)
+                    let pose = ControllerPose(
+                        x: position.x,
+                        y: position.y,
+                        z: position.z,
+                        qx: orientation.imag.x,
+                        qy: orientation.imag.y,
+                        qz: orientation.imag.z,
+                        qw: orientation.real,
+                        timestamp: Date().timeIntervalSince1970
+                    )
+                    self.onPose?(chirality, pose)
+                }
+            } catch {
+                // Input and tread control remain usable when spatial tracking is unavailable or
+                // denied. No stale pose is emitted as a valid arm target.
+                for chirality in [Accessory.Chirality.left, .right] {
+                    self.onPose?(chirality, nil)
+                }
+            }
+        }
+    }
+
+    func stop() {
+        trackingTask?.cancel()
+        trackingTask = nil
+        session?.stop()
+        session = nil
     }
 }

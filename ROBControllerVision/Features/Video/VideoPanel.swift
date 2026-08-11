@@ -33,7 +33,8 @@ struct VideoPanel: View {
                     )
                 }
             }
-            .frame(minHeight: 390)
+            .aspectRatio(16 / 9, contentMode: .fit)
+            .frame(maxWidth: .infinity, minHeight: 560)
         }
         .padding(20)
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 20))
@@ -42,7 +43,7 @@ struct VideoPanel: View {
     private var header: some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
-                Text("Robot Camera")
+                Text("ROB Wide Camera")
                     .font(.title2.bold())
                 Text(stream == nil ? "No active subscription" : model.videoPipeline.state.label)
                     .font(.caption)

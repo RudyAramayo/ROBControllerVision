@@ -473,13 +473,18 @@ final class RobotViewModel {
         }
 
         inputSequence &+= 1
+        // The two controller sticks are direct tread demands. Convert to the protocol's
+        // linear/angular representation without losing either independent floating-point value.
+        let linear = (sample.leftTread + sample.rightTread) * 0.5
+        let angular = (sample.leftTread - sample.rightTread) * 0.5
         let controlSample = OperatorControlSample(
             sequence: inputSequence,
             source: .gameController,
-            linear: sample.linear * speedLimit,
-            angular: sample.angular * speedLimit,
+            linear: linear * speedLimit,
+            angular: angular * speedLimit,
             cameraPan: sample.cameraPan,
             cameraTilt: sample.cameraTilt,
+            controllerPoses: sample.controllerPoses,
             deadManIsHeld: sample.deadManIsHeld
         )
         let session = session

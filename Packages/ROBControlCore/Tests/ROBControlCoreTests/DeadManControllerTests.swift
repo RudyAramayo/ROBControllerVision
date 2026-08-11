@@ -35,7 +35,7 @@ struct DeadManControllerTests {
             controller.evaluate(
                 connectionIsReady: true,
                 at: origin.advanced(by: .milliseconds(249))
-            ) == .drive(MotionVector(linear: 0.7, angular: -0.2))
+            ) == .drive(MotionVector(linear: 0.7, angular: -0.2), nil)
         )
         #expect(
             controller.evaluate(
@@ -128,7 +128,7 @@ struct DeadManControllerTests {
 
         #expect(
             controller.evaluate(connectionIsReady: true, at: origin)
-                == .drive(MotionVector(linear: 0.5, angular: 0))
+                == .drive(MotionVector(linear: 0.5, angular: 0), nil)
         )
     }
 }

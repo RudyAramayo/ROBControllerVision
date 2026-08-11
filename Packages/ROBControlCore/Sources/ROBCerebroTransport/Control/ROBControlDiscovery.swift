@@ -82,11 +82,23 @@ public actor ROBControlDiscovery {
 
         browser.browseResultsChangedHandler = { [weak self, weak browser] results, _ in
             guard let browser else { return }
-            let selected =
-                results
+            let matches = results
                 .filter { ROBCerebroPairingStore.result($0, matches: credential) }
-                .sorted { $0.endpoint.debugDescription < $1.endpoint.debugDescription }
-                .first
+            let selected: NWBrowser.Result?
+            if let exactMatch = matches
+                .sorted(by: { $0.endpoint.debugDescription < $1.endpoint.debugDescription })
+                .first {
+                selected = exactMatch
+            } else if results.count == 1,
+                ROBCerebroPairingStore.robotID(fromBonjourMetadata: results[results.startIndex].metadata)
+                    == nil {
+                // Network.framework can omit Bonjour TXT metadata. Trying the sole route is safe:
+                // TLS still pins the enrolled Cerebro certificate and authentication proves the
+                // shared pairing secret, so a different robot fails closed.
+                selected = results.first
+            } else {
+                selected = nil
+            }
             guard let selected else { return }
 
             let serviceName: String

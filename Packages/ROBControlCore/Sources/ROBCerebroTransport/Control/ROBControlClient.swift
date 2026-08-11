@@ -33,6 +33,7 @@ public actor ROBControlClient {
     }
 
     private static let authenticationTimeout: Duration = .seconds(5)
+    private static let pairingHelloSize = 4_096
 
     public nonisolated let credential: ROBCerebroCredential
 
@@ -212,14 +213,25 @@ public actor ROBControlClient {
         }
     }
 
-    private func connectionBecameReady(attemptID: UUID) {
+    private func connectionBecameReady(attemptID: UUID) async {
         guard connectionAttemptID == attemptID, connection != nil else { return }
         switch authenticationState {
         case .idle:
             authenticationState = .awaitingChallenge
             setState(.authenticating)
             armAuthenticationTimeout(attemptID: attemptID)
-            receiveNextMessage(attemptID: attemptID)
+            var hello = Data(credential.controllerID.uuidString.lowercased().utf8)
+            hello.append(Data(repeating: 0, count: Self.pairingHelloSize - hello.count))
+            do {
+                try await sendFrame(type: .pairingHello, data: hello)
+                guard connectionAttemptID == attemptID else { return }
+                receiveNextMessage(attemptID: attemptID)
+            } catch {
+                stopConnection(
+                    error: Self.transportError(from: error),
+                    expectedAttemptID: attemptID
+                )
+            }
         case .authenticated(let sessionID):
             setState(.connected(sessionID: sessionID))
             receiveNextMessage(attemptID: attemptID)
@@ -381,6 +393,7 @@ public actor ROBControlClient {
                 .pairingProof,
                 .pairingAccepted,
                 .pairingRejected,
+                .pairingHello,
                 .invalid:
                 stopConnection(error: .invalidWireMessage, expectedAttemptID: attemptID)
                 return

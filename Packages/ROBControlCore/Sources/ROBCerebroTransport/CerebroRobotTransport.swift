@@ -178,12 +178,13 @@ public actor CerebroRobotTransport: RobotTransport, RobotVideoDataTransport {
         case .setArmed(false):
             try await sendStoppedAndReleaseAuthority()
 
-        case .drive(let motion):
+        case .drive(let motion, let controllerPoses):
             try await controlClient.sendApplicationData(
                 ROBLegacyControllerPayload.controllerSnapshot(
                     motion: motion,
                     senderID: credential.controllerID,
-                    brakeIsLocked: false
+                    brakeIsLocked: false,
+                    controllerPoses: controllerPoses
                 )
             )
 
