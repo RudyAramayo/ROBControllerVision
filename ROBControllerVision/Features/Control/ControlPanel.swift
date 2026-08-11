@@ -48,6 +48,10 @@ struct ControlPanel: View {
                 .font(.caption2.weight(.medium))
                 .foregroundStyle(.secondary)
 
+            Label(model.gameController.poseTrackingStatus, systemImage: "move.3d")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
                     Text("Speed limit")

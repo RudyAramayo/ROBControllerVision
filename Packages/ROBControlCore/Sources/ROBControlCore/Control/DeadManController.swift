@@ -11,7 +11,7 @@ public struct DeadManController: Sendable {
 
     public enum Decision: Equatable, Sendable {
         case drive(MotionVector, ControllerPosePair?)
-        case stop(MotionInhibitReason)
+        case stop(MotionInhibitReason, ControllerPosePair? = nil)
     }
 
     public let configuration: Configuration
@@ -81,29 +81,30 @@ public struct DeadManController: Sendable {
         connectionIsReady: Bool,
         at instant: ContinuousClock.Instant = .now
     ) -> Decision {
+        let diagnosticPoses = latestInput?.controllerPoses
         if emergencyStopIsLatched {
-            return .stop(.emergencyStop)
+            return .stop(.emergencyStop, diagnosticPoses)
         }
         guard connectionIsReady else {
-            return .stop(.disconnected)
+            return .stop(.disconnected, diagnosticPoses)
         }
         guard sceneIsActive else {
-            return .stop(.sceneInactive)
+            return .stop(.sceneInactive, diagnosticPoses)
         }
         guard isArmed else {
-            return .stop(.operatorDisarmed)
+            return .stop(.operatorDisarmed, diagnosticPoses)
         }
         if let forcedInhibitReason {
-            return .stop(forcedInhibitReason)
+            return .stop(forcedInhibitReason, diagnosticPoses)
         }
         guard let latestInput, let latestInputAt else {
-            return .stop(.deadManReleased)
+            return .stop(.deadManReleased, diagnosticPoses)
         }
         guard latestInput.deadManIsHeld else {
-            return .stop(.deadManReleased)
+            return .stop(.deadManReleased, diagnosticPoses)
         }
         guard latestInputAt.duration(to: instant) < configuration.inputTimeout else {
-            return .stop(.inputExpired)
+            return .stop(.inputExpired, diagnosticPoses)
         }
         return .drive(latestInput.motion, latestInput.controllerPoses)
     }

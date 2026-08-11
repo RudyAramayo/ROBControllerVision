@@ -58,8 +58,16 @@ enum ROBLegacyControllerPayload {
         return try archive(message: message, senderID: senderID, controllerPoses: controllerPoses)
     }
 
-    static func stoppedSnapshot(senderID: UUID) throws -> Data {
-        try controllerSnapshot(motion: .stopped, senderID: senderID, brakeIsLocked: true)
+    static func stoppedSnapshot(
+        senderID: UUID,
+        controllerPoses: ControllerPosePair? = nil
+    ) throws -> Data {
+        try controllerSnapshot(
+            motion: .stopped,
+            senderID: senderID,
+            brakeIsLocked: true,
+            controllerPoses: controllerPoses
+        )
     }
 
     private static let posixLocale = Locale(identifier: "en_US_POSIX")

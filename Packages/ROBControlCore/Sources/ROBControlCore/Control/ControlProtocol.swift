@@ -143,7 +143,7 @@ public enum MotionInhibitReason: String, Codable, Hashable, Sendable {
 public enum RobotCommand: Hashable, Sendable {
     case setArmed(Bool)
     case drive(MotionVector, ControllerPosePair? = nil)
-    case stop(MotionInhibitReason)
+    case stop(MotionInhibitReason, ControllerPosePair? = nil)
     case emergencyStop
     case resetEmergencyStop
     case video(VideoControlMessage)
@@ -215,7 +215,10 @@ extension RobotCommand: Codable {
                 try container.decodeIfPresent(ControllerPosePair.self, forKey: .controllerPoses)
             )
         case .stop:
-            self = .stop(try container.decode(MotionInhibitReason.self, forKey: .reason))
+            self = .stop(
+                try container.decode(MotionInhibitReason.self, forKey: .reason),
+                try container.decodeIfPresent(ControllerPosePair.self, forKey: .controllerPoses)
+            )
         case .emergencyStop:
             self = .emergencyStop
         case .resetEmergencyStop:
@@ -235,9 +238,10 @@ extension RobotCommand: Codable {
             try container.encode(Kind.drive, forKey: .type)
             try container.encode(motion, forKey: .motion)
             try container.encodeIfPresent(controllerPoses, forKey: .controllerPoses)
-        case .stop(let reason):
+        case .stop(let reason, let controllerPoses):
             try container.encode(Kind.stop, forKey: .type)
             try container.encode(reason, forKey: .reason)
+            try container.encodeIfPresent(controllerPoses, forKey: .controllerPoses)
         case .emergencyStop:
             try container.encode(Kind.emergencyStop, forKey: .type)
         case .resetEmergencyStop:

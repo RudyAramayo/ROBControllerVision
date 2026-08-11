@@ -36,6 +36,7 @@ final class GameControllerInput: NSObject {
 
     private struct ControllerState {
         var side: TreadSide
+        var lastEventTimestamp: TimeInterval = 0
         var stickY: Float = 0
         var secondStickY: Float = 0
         var cameraPan: Float = 0
@@ -49,6 +50,7 @@ final class GameControllerInput: NSObject {
     private(set) var deadManIsHeld = false
     private(set) var leftTread: Float = 0
     private(set) var rightTread: Float = 0
+    private(set) var poseTrackingStatus = "Spatial pose tracking has not started"
     private(set) var lastEventDescription = "Hold A or the right trigger to drive"
 
     @ObservationIgnored var onSample: ((GameControllerSample) -> Void)?
@@ -57,7 +59,6 @@ final class GameControllerInput: NSObject {
     @ObservationIgnored private var isStarted = false
     @ObservationIgnored private var physicalInputTask: Task<Void, Never>?
     @ObservationIgnored private var poseTracker: AnyObject?
-    @ObservationIgnored private var lastPhysicalEventTimestamp: TimeInterval = 0
 
     func start() {
         guard !isStarted else { return }
@@ -98,6 +99,7 @@ final class GameControllerInput: NSObject {
             tracker.stop()
         }
         poseTracker = nil
+        poseTrackingStatus = "Spatial pose tracking stopped"
         apply(.disconnected)
     }
 
@@ -130,10 +132,13 @@ final class GameControllerInput: NSObject {
             return
         }
 
-        let side = controller.extendedGamepad == nil ? senseSide(for: physicalProfile) : .both
+        let side = controller.extendedGamepad == nil ? availableSenseSide() : .both
         controllers[id] = controller
-        controllerStates[id] = ControllerState(side: side)
-        lastPhysicalEventTimestamp = physicalProfile.lastEventTimestamp
+        controllerStates[id] = ControllerState(
+            side: side,
+            lastEventTimestamp: physicalProfile.lastEventTimestamp
+        )
+        assignPlayerIndices()
         updateControllerName()
 
         if let gamepad = controller.extendedGamepad {
@@ -173,8 +178,11 @@ final class GameControllerInput: NSObject {
     private func pollPhysicalInput() {
         for (id, controller) in controllers {
             let eventTimestamp = controller.physicalInputProfile.lastEventTimestamp
-            guard eventTimestamp > lastPhysicalEventTimestamp else { continue }
-            lastPhysicalEventTimestamp = eventTimestamp
+            guard var state = controllerStates[id], eventTimestamp > state.lastEventTimestamp else {
+                continue
+            }
+            state.lastEventTimestamp = eventTimestamp
+            controllerStates[id] = state
             updateController(id, from: controller)
         }
     }
@@ -233,13 +241,21 @@ final class GameControllerInput: NSObject {
         publishCombinedSample()
     }
 
-    private func senseSide(for profile: GCPhysicalInputProfile) -> TreadSide {
-        let hasRightButtons = profile.buttons[GCInputButtonA] != nil || profile.buttons[GCInputButtonB] != nil
-        let hasLeftButtons = profile.buttons[GCInputButtonX] != nil || profile.buttons[GCInputButtonY] != nil
-        if hasRightButtons && !hasLeftButtons { return .right }
-        if hasLeftButtons && !hasRightButtons { return .left }
+    private func availableSenseSide() -> TreadSide {
         if !controllerStates.values.contains(where: { $0.side == .left }) { return .left }
         return .right
+    }
+
+    private func assignPlayerIndices() {
+        for (index, controller) in controllers.values.enumerated() {
+            switch index {
+            case 0: controller.playerIndex = .index1
+            case 1: controller.playerIndex = .index2
+            case 2: controller.playerIndex = .index3
+            case 3: controller.playerIndex = .index4
+            default: controller.playerIndex = .indexUnset
+            }
+        }
     }
 
     private func publishCombinedSample() {
@@ -293,12 +309,31 @@ final class GameControllerInput: NSObject {
             tracker = existing
         } else {
             tracker = ControllerPoseTracker()
+            tracker.onStatus = { [weak self] status in
+                self?.poseTrackingStatus = status
+            }
+            tracker.onSideIdentified = { [weak self] id, chirality in
+                self?.setSide(chirality, for: id)
+            }
             tracker.onPose = { [weak self] chirality, pose in
                 self?.applyTrackedPose(pose, chirality: chirality)
             }
             poseTracker = tracker
         }
         tracker.track(Array(controllers.values))
+    }
+
+    @available(visionOS 26.0, *)
+    private func setSide(_ chirality: Accessory.Chirality, for id: ObjectIdentifier) {
+        guard var state = controllerStates[id] else { return }
+        switch chirality {
+        case .left: state.side = .left
+        case .right: state.side = .right
+        case .unspecified: return
+        @unknown default: return
+        }
+        controllerStates[id] = state
+        publishCombinedSample()
     }
 
     @available(visionOS 26.0, *)
@@ -358,6 +393,8 @@ private final class ControllerPoseTracker {
     }
 
     var onPose: ((Accessory.Chirality, ControllerPose?) -> Void)?
+    var onSideIdentified: ((ObjectIdentifier, Accessory.Chirality) -> Void)?
+    var onStatus: ((String) -> Void)?
 
     private var session: ARKitSession?
     private var trackingTask: Task<Void, Never>?
@@ -366,6 +403,7 @@ private final class ControllerPoseTracker {
         stop()
         guard !controllers.isEmpty else { return }
         let sendableControllers = controllers.map(SendableController.init(value:))
+        onStatus?("Starting spatial tracking for \(controllers.count) controller(s)…")
         trackingTask = Task { [weak self] in
             guard let self else { return }
             do {
@@ -377,10 +415,17 @@ private final class ControllerPoseTracker {
                     return loaded
                 }.value
                 guard !Task.isCancelled else { return }
+                for (controller, accessory) in zip(sendableControllers, accessories) {
+                    self.onSideIdentified?(
+                        ObjectIdentifier(controller.value),
+                        accessory.inherentChirality
+                    )
+                }
                 let provider = AccessoryTrackingProvider(accessories: accessories)
                 let session = ARKitSession()
                 self.session = session
                 try await session.run([provider])
+                self.onStatus?("Spatial controller poses are streaming")
                 for await update in provider.anchorUpdates {
                     guard !Task.isCancelled else { return }
                     let anchor = update.anchor
@@ -413,6 +458,7 @@ private final class ControllerPoseTracker {
                 for chirality in [Accessory.Chirality.left, .right] {
                     self.onPose?(chirality, nil)
                 }
+                self.onStatus?("Spatial tracking unavailable: \(error.localizedDescription)")
             }
         }
     }

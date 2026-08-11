@@ -48,6 +48,25 @@ struct ROBLegacyControllerPayloadTests {
         #expect(message.contains("tredBrakeLock=1"))
     }
 
+    @Test("Stopped snapshots retain pose diagnostics while motion stays braked")
+    func stoppedSnapshotWithPoseDiagnostics() throws {
+        let left = try #require(ControllerPose(
+            x: 0.1, y: 1.2, z: -0.4,
+            qx: 0, qy: 0, qz: 0, qw: 1,
+            timestamp: 42
+        ))
+        let data = try ROBLegacyControllerPayload.stoppedSnapshot(
+            senderID: UUID(),
+            controllerPoses: ControllerPosePair(left: left)
+        )
+        let envelope = try #require(try decode(data))
+        let message = try #require(envelope["message"] as? String)
+        #expect(message.contains("tredBrakeLock=1"))
+        #expect(envelope["controller.pose.version"] as? String == "1")
+        #expect(envelope["controller.pose.left"] != nil)
+        #expect(envelope["controller.pose.right"] == nil)
+    }
+
     @Test("Spatial controller poses are versioned beside the legacy snapshot")
     func spatialControllerPoses() throws {
         let left = try #require(ControllerPose(

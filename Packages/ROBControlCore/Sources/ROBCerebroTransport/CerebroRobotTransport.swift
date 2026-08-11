@@ -188,9 +188,12 @@ public actor CerebroRobotTransport: RobotTransport, RobotVideoDataTransport {
                 )
             )
 
-        case .stop:
+        case .stop(_, let controllerPoses):
             try await controlClient.sendApplicationData(
-                ROBLegacyControllerPayload.stoppedSnapshot(senderID: credential.controllerID)
+                ROBLegacyControllerPayload.stoppedSnapshot(
+                    senderID: credential.controllerID,
+                    controllerPoses: controllerPoses
+                )
             )
 
         case .emergencyStop:

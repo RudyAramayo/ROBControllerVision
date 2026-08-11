@@ -215,7 +215,7 @@ public actor SimulatedRobotEndpoint: RobotTransport, RobotVideoDataTransport {
                 )
             )
 
-        case .stop(let reason):
+        case .stop(let reason, _):
             stopMotion(reason: reason)
 
         case .emergencyStop:

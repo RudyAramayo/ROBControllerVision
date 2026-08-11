@@ -34,7 +34,7 @@ struct VideoPanel: View {
                 }
             }
             .aspectRatio(16 / 9, contentMode: .fit)
-            .frame(maxWidth: .infinity, minHeight: 560)
+            .frame(maxWidth: .infinity, minHeight: 500, maxHeight: 620)
         }
         .padding(20)
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 20))

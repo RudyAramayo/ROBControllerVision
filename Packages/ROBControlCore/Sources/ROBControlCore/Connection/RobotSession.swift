@@ -440,13 +440,13 @@ public actor RobotSession {
                 handleSendFailure(error)
             }
 
-        case .stop(let reason):
+        case .stop(let reason, let controllerPoses):
             synchronizeSafetyState(inhibitReason: reason)
             do {
                 if reason == .emergencyStop {
                     try await send(.emergencyStop)
                 } else {
-                    try await send(.stop(reason))
+                    try await send(.stop(reason, controllerPoses))
                 }
             } catch {
                 handleSendFailure(error)

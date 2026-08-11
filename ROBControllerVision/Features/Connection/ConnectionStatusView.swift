@@ -3,6 +3,7 @@ import SwiftUI
 
 struct ConnectionStatusView: View {
     @Bindable var model: RobotViewModel
+    var compact = false
 
     private var phaseColor: Color {
         switch model.snapshot.connection.phase {
@@ -42,7 +43,7 @@ struct ConnectionStatusView: View {
 
                 Spacer()
 
-                if let service = model.snapshot.connection.endpoint?.serviceType {
+                if !compact, let service = model.snapshot.connection.endpoint?.serviceType {
                     Text(service)
                         .font(.caption.monospaced())
                         .foregroundStyle(.secondary)
@@ -51,33 +52,22 @@ struct ConnectionStatusView: View {
 
             Divider()
 
-            HStack(spacing: 12) {
-                Picker("Endpoint", selection: $model.connectionDestination) {
-                    ForEach(RobotConnectionDestination.allCases) { destination in
-                        Text(destination.label).tag(destination)
+            if compact {
+                VStack(spacing: 10) {
+                    endpointPicker
+                    HStack {
+                        pairingButton
+                        Spacer()
+                        connectionButton
                     }
                 }
-                .pickerStyle(.segmented)
-                .frame(maxWidth: 360)
-                .disabled(!model.canChangeConnectionDestination)
-
-                Button {
-                    model.showsPairingSheet = true
-                } label: {
-                    Label(
-                        model.hasInstalledCerebroCredential ? "Credential" : "Pair Cerebro",
-                        systemImage: model.cerebroCredentialIsVerified
-                            ? "checkmark.shield"
-                            : "key"
-                    )
+            } else {
+                HStack(spacing: 12) {
+                    endpointPicker.frame(maxWidth: 360)
+                    pairingButton
+                    Spacer()
+                    connectionButton
                 }
-                .buttonStyle(.bordered)
-
-                Spacer()
-
-                Button(model.connectionButtonTitle, action: model.toggleConnection)
-                    .buttonStyle(.borderedProminent)
-                    .disabled(!model.canToggleConnection)
             }
         }
         .padding(18)
@@ -85,5 +75,33 @@ struct ConnectionStatusView: View {
         .sheet(isPresented: $model.showsPairingSheet) {
             CerebroPairingSheet(model: model)
         }
+    }
+
+    private var endpointPicker: some View {
+        Picker("Endpoint", selection: $model.connectionDestination) {
+            ForEach(RobotConnectionDestination.allCases) { destination in
+                Text(destination.label).tag(destination)
+            }
+        }
+        .pickerStyle(.segmented)
+        .disabled(!model.canChangeConnectionDestination)
+    }
+
+    private var pairingButton: some View {
+        Button {
+            model.showsPairingSheet = true
+        } label: {
+            Label(
+                model.hasInstalledCerebroCredential ? "Credential" : "Pair Cerebro",
+                systemImage: model.cerebroCredentialIsVerified ? "checkmark.shield" : "key"
+            )
+        }
+        .buttonStyle(.bordered)
+    }
+
+    private var connectionButton: some View {
+        Button(model.connectionButtonTitle, action: model.toggleConnection)
+            .buttonStyle(.borderedProminent)
+            .disabled(!model.canToggleConnection)
     }
 }
