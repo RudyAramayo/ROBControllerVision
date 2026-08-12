@@ -18,6 +18,7 @@ struct ContentView: View {
 
             VStack(spacing: 18) {
                 ConnectionStatusView(model: model, compact: true)
+                OperatorSpeechPanel(model: model)
                 TelemetryPanel(snapshot: model.snapshot, layout: .vertical)
                 Spacer(minLength: 0)
                 CockpitSafetyLegend()

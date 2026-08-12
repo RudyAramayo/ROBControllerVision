@@ -325,6 +325,15 @@ public actor RobotSession {
         }
     }
 
+    public func sendOperatorText(_ text: String, mode: OperatorTextMode) async throws {
+        guard snapshot.connection.isReady else { throw RobotTransportError.notConnected }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed.count <= 1_024 else {
+            throw RobotTransportError.invalidState("Operator text must contain 1 through 1,024 characters.")
+        }
+        try await send(.operatorText(OperatorTextMessage(text: trimmed, mode: mode)))
+    }
+
     public func subscribeVideo(
         _ request: VideoSubscriptionRequest
     ) async throws -> VideoSubscriptionResponse {

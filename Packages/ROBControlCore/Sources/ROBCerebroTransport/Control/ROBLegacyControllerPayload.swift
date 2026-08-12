@@ -17,6 +17,25 @@ enum ROBLegacyControllerPayload {
         try archive(message: "ReleaseMasterController", senderID: senderID)
     }
 
+    static func operatorText(_ operatorText: OperatorTextMessage, senderID: UUID) throws -> Data {
+        let trimmed = operatorText.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed.count <= 1_024,
+              !trimmed.unicodeScalars.contains(where: {
+                  CharacterSet.controlCharacters.contains($0) && $0 != "\n" && $0 != "\t"
+              }) else {
+            throw ROBCerebroTransportError.invalidApplicationPayload
+        }
+        return try archive(
+            message: "ROBOperatorTextV1",
+            senderID: senderID,
+            additionalFields: [
+                "operator.text.version": "1",
+                "operator.text.mode": operatorText.mode.rawValue,
+                "operator.text.value": trimmed,
+            ]
+        )
+    }
+
     static func controllerSnapshot(
         motion: MotionVector,
         camera: CameraVector = .centered,
@@ -88,7 +107,8 @@ enum ROBLegacyControllerPayload {
         senderID: UUID,
         controllerPoses: ControllerPosePair? = nil,
         grippers: GripperVector = .inactive,
-        torso: TorsoVector = .inactive
+        torso: TorsoVector = .inactive,
+        additionalFields: [String: String] = [:]
     ) throws -> Data {
         let envelope = NSMutableDictionary(dictionary: [
             "message": message,
@@ -109,6 +129,9 @@ enum ROBLegacyControllerPayload {
             envelope["torso.rotation.normalized"] = String(
                 format: "%.6f", locale: posixLocale, torso.rotation
             )
+        }
+        for (key, value) in additionalFields {
+            envelope[key] = value
         }
         let data = try NSKeyedArchiver.archivedData(
             withRootObject: envelope,

@@ -81,6 +81,23 @@ public struct TorsoVector: Codable, Hashable, Sendable {
     public static let inactive = TorsoVector()
 }
 
+public enum OperatorTextMode: String, Codable, CaseIterable, Hashable, Sendable {
+    /// Process text exactly like Cerebro's local text input.
+    case command
+    /// Speak the text verbatim without sending it to the AI or motion parser.
+    case puppetSpeech
+}
+
+public struct OperatorTextMessage: Codable, Hashable, Sendable {
+    public let text: String
+    public let mode: OperatorTextMode
+
+    public init(text: String, mode: OperatorTextMode) {
+        self.text = text
+        self.mode = mode
+    }
+}
+
 public struct OperatorControlSample: Equatable, Sendable {
     public let sequence: UInt64
     public let source: ControlInputSource
@@ -205,6 +222,7 @@ public enum RobotCommand: Hashable, Sendable {
     case emergencyStop
     case resetEmergencyStop
     case video(VideoControlMessage)
+    case operatorText(OperatorTextMessage)
 }
 
 public struct RobotCommandEnvelope: Codable, Hashable, Identifiable, Sendable {
@@ -254,6 +272,7 @@ extension RobotCommand: Codable {
         case camera
         case grippers
         case torso
+        case operatorText
     }
 
     private enum Kind: String, Codable {
@@ -263,6 +282,7 @@ extension RobotCommand: Codable {
         case emergencyStop
         case resetEmergencyStop
         case video
+        case operatorText
     }
 
     public init(from decoder: any Decoder) throws {
@@ -289,6 +309,8 @@ extension RobotCommand: Codable {
             self = .resetEmergencyStop
         case .video:
             self = .video(try container.decode(VideoControlMessage.self, forKey: .video))
+        case .operatorText:
+            self = .operatorText(try container.decode(OperatorTextMessage.self, forKey: .operatorText))
         }
     }
 
@@ -316,6 +338,9 @@ extension RobotCommand: Codable {
         case .video(let video):
             try container.encode(Kind.video, forKey: .type)
             try container.encode(video, forKey: .video)
+        case .operatorText(let message):
+            try container.encode(Kind.operatorText, forKey: .type)
+            try container.encode(message, forKey: .operatorText)
         }
     }
 }

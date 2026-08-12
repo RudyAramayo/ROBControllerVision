@@ -229,6 +229,14 @@ public actor CerebroRobotTransport: RobotTransport, RobotVideoDataTransport {
                     feedback: feedback
                 )
             }
+
+        case .operatorText(let message):
+            try await controlClient.sendApplicationData(
+                ROBLegacyControllerPayload.operatorText(
+                    message,
+                    senderID: credential.controllerID
+                )
+            )
         }
     }
 

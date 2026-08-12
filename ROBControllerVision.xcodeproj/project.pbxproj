@@ -13,6 +13,8 @@
 		B00000000000000000000004 /* GameControllerInput.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000004 /* GameControllerInput.swift */; };
 		B00000000000000000000005 /* ConnectionStatusView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000005 /* ConnectionStatusView.swift */; };
 		B00000000000000000000006 /* ControlPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000006 /* ControlPanel.swift */; };
+		B00000000000000000000011 /* VisionSpeechInput.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000010 /* VisionSpeechInput.swift */; };
+		B00000000000000000000012 /* OperatorSpeechPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000011 /* OperatorSpeechPanel.swift */; };
 		B00000000000000000000007 /* TelemetryPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000007 /* TelemetryPanel.swift */; };
 		B00000000000000000000008 /* VideoPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000008 /* VideoPanel.swift */; };
 		B00000000000000000000009 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000009 /* Assets.xcassets */; };
@@ -32,6 +34,8 @@
 		F00000000000000000000004 /* GameControllerInput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameControllerInput.swift; sourceTree = "<group>"; };
 		F00000000000000000000005 /* ConnectionStatusView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionStatusView.swift; sourceTree = "<group>"; };
 		F00000000000000000000006 /* ControlPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlPanel.swift; sourceTree = "<group>"; };
+		F00000000000000000000010 /* VisionSpeechInput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisionSpeechInput.swift; sourceTree = "<group>"; };
+		F00000000000000000000011 /* OperatorSpeechPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OperatorSpeechPanel.swift; sourceTree = "<group>"; };
 		F00000000000000000000007 /* TelemetryPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelemetryPanel.swift; sourceTree = "<group>"; };
 		F00000000000000000000008 /* VideoPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoPanel.swift; sourceTree = "<group>"; };
 		F00000000000000000000009 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -118,6 +122,7 @@
 			isa = PBXGroup;
 			children = (
 				F00000000000000000000006 /* ControlPanel.swift */,
+				F00000000000000000000011 /* OperatorSpeechPanel.swift */,
 			);
 			path = Control;
 			sourceTree = "<group>";
@@ -142,6 +147,7 @@
 			isa = PBXGroup;
 			children = (
 				F0000000000000000000000F /* HeadOrientationInput.swift */,
+				F00000000000000000000010 /* VisionSpeechInput.swift */,
 				A0000000000000000000000E /* GameController */,
 				A00000000000000000000013 /* Video */,
 			);
@@ -257,6 +263,8 @@
 				B00000000000000000000004 /* GameControllerInput.swift in Sources */,
 				B00000000000000000000005 /* ConnectionStatusView.swift in Sources */,
 				B00000000000000000000006 /* ControlPanel.swift in Sources */,
+				B00000000000000000000011 /* VisionSpeechInput.swift in Sources */,
+				B00000000000000000000012 /* OperatorSpeechPanel.swift in Sources */,
 				B00000000000000000000007 /* TelemetryPanel.swift in Sources */,
 				B00000000000000000000008 /* VideoPanel.swift in Sources */,
 				B0000000000000000000000B /* SampleBufferVideoView.swift in Sources */,

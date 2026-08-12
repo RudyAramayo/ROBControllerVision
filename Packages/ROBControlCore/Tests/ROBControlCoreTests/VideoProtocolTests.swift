@@ -78,4 +78,22 @@ struct VideoProtocolTests {
 
         #expect(motion == .stopped)
     }
+
+    @Test("Operator text preserves command and puppet speech modes")
+    func operatorTextRoundTrip() throws {
+        for mode in OperatorTextMode.allCases {
+            let envelope = RobotCommandEnvelope(
+                sessionID: UUID(),
+                sequence: 7,
+                command: .operatorText(
+                    OperatorTextMessage(text: "Wave hello, ROB!", mode: mode)
+                )
+            )
+
+            let data = try JSONEncoder().encode(envelope)
+            let decoded = try JSONDecoder().decode(RobotCommandEnvelope.self, from: data)
+
+            #expect(decoded == envelope)
+        }
+    }
 }

@@ -158,6 +158,22 @@ struct ROBLegacyControllerPayloadTests {
         #expect(envelope["sender"] as? String == senderID.uuidString.lowercased())
     }
 
+    @Test("Operator text carries an explicit execution mode")
+    func operatorText() throws {
+        let senderID = UUID(uuidString: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")!
+        let data = try ROBLegacyControllerPayload.operatorText(
+            OperatorTextMessage(text: "  Hello from Vision Pro  ", mode: .puppetSpeech),
+            senderID: senderID
+        )
+        let envelope = try #require(try decode(data))
+
+        #expect(envelope["message"] as? String == "ROBOperatorTextV1")
+        #expect(envelope["sender"] as? String == senderID.uuidString.lowercased())
+        #expect(envelope["operator.text.version"] as? String == "1")
+        #expect(envelope["operator.text.mode"] as? String == "puppetSpeech")
+        #expect(envelope["operator.text.value"] as? String == "Hello from Vision Pro")
+    }
+
     private func decode(_ data: Data) throws -> NSDictionary? {
         try NSKeyedUnarchiver.unarchivedObject(
             ofClasses: [NSDictionary.self, NSString.self],

@@ -30,10 +30,13 @@ final class RobotViewModel {
     var showsPairingSheet = false
     var connectionDestination: RobotConnectionDestination = .simulator
     var speedLimit: Float = 0.65
+    var operatorTextDraft = ""
+    var operatorTextMode: OperatorTextMode = .command
 
     let gameController: GameControllerInput
     let headOrientation: HeadOrientationInput
     let videoPipeline: VideoPipelineCoordinator
+    let speechInput: VisionSpeechInput
 
     @ObservationIgnored private let session: RobotSession
     @ObservationIgnored private let simulator: SimulatedRobotEndpoint
@@ -62,9 +65,17 @@ final class RobotViewModel {
             simulator
             ?? SimulatedRobotEndpoint(videoDataSource: SyntheticVideoDataSource())
         self.videoPipeline = videoPipeline
+        self.speechInput = VisionSpeechInput()
         self.pairingStore = pairingStore
         self.gameController = GameControllerInput()
         self.headOrientation = HeadOrientationInput()
+        self.speechInput.onTranscript = { [weak self] transcript, isFinal in
+            guard let self else { return }
+            self.operatorTextDraft = transcript
+            if isFinal {
+                self.sendOperatorText(as: self.operatorTextMode)
+            }
+        }
         self.gameController.onSample = { [weak self] sample in
             self?.acceptGameController(sample)
         }
@@ -114,6 +125,7 @@ final class RobotViewModel {
         stopVideoPipeline()
         gameController.stop()
         headOrientation.stop()
+        speechInput.stop()
         let session = session
         Task {
             await session.disconnect()
@@ -311,6 +323,35 @@ final class RobotViewModel {
         Task {
             await session.resetEmergencyStop()
         }
+    }
+
+    func toggleVisionDictation() {
+        speechInput.toggle()
+    }
+
+    func sendOperatorText() {
+        let text = operatorTextDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else {
+            statusMessage = "Dictate or type something first"
+            return
+        }
+        let mode = operatorTextMode
+        let session = session
+        Task { [weak self] in
+            do {
+                try await session.sendOperatorText(text, mode: mode)
+                self?.statusMessage = mode == .command
+                    ? "Vision Pro text sent as ROB input"
+                    : "Puppet speech sent to ROB"
+            } catch {
+                self?.statusMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func sendOperatorText(as mode: OperatorTextMode) {
+        operatorTextMode = mode
+        sendOperatorText()
     }
 
     func toggleVideoSubscription() {

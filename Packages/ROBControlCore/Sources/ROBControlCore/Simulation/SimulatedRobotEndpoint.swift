@@ -234,6 +234,10 @@ public actor SimulatedRobotEndpoint: RobotTransport, RobotVideoDataTransport {
 
         case .video(let message):
             await handleVideo(message, sessionID: envelope.sessionID)
+
+        case .operatorText:
+            // The simulator acknowledges speech/text without synthesizing audio.
+            break
         }
 
         eventContinuation?.yield(.commandAcknowledged(envelope.id))
