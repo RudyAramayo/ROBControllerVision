@@ -208,6 +208,18 @@ public actor CerebroRobotTransport: RobotTransport, RobotVideoDataTransport {
             // Resetting the app latch deliberately leaves motion disarmed until a new arm request.
             break
 
+        case .armTargetIntent(let target):
+            let data = try RobotArmWireCodec.encodeTargetIntent(
+                target,
+                messageID: envelope.id,
+                senderID: credential.controllerID,
+                sessionID: activeSessionID,
+                sequence: envelope.sequence,
+                issuedAtUnixMilliseconds: envelope.issuedAtUnixMilliseconds,
+                leaseMilliseconds: envelope.leaseMilliseconds
+            )
+            try await controlClient.sendApplicationData(data)
+
         case .video(let message):
             guard let videoClient else {
                 throw ROBCerebroTransportError.videoUnavailable
@@ -303,7 +315,27 @@ public actor CerebroRobotTransport: RobotTransport, RobotVideoDataTransport {
             }
             publish(.disconnected(reason: error?.localizedDescription ?? "Cerebro disconnected."))
 
-        case .stateChanged, .applicationData, .lidarTelemetry:
+        case .applicationData(let data):
+            do {
+                guard let message = try RobotArmWireCodec.decode(data) else { break }
+                switch message {
+                case .measuredState(let telemetry):
+                    publish(.armTelemetry(telemetry))
+                case .targetDisposition(let disposition):
+                    guard disposition.recipientID == credential.controllerID else { break }
+                    publish(.armTargetDisposition(disposition))
+                case .targetIntent:
+                    // Cerebro never originates controller target intents.
+                    break
+                }
+            } catch {
+                // Application data also carries legacy keyed archives and
+                // independent protocols. A malformed claimed arm message is
+                // isolated from the safety-critical control connection.
+                break
+            }
+
+        case .stateChanged, .lidarTelemetry:
             break
         }
     }

@@ -133,3 +133,21 @@ Scene suspension, disconnect, unsubscribe, stream-ended notification, or fatal r
 ## Compatibility boundary
 
 The production adapter deliberately contains Cerebro's established controller payload rather than changing the core model to match it. New protocol work should extend typed domain messages and add a narrow adapter mapping. It must not leak keyed archives, native implementation details, or service-name compatibility behavior into `ROBControlCore`.
+
+## Amber arm observation and target preview
+
+The authenticated control connection also carries the narrow
+`rob-arm-control/1` JSON subprotocol. Cerebro publishes bounded seven-joint
+measured position, velocity, current, and status telemetry for each arm.
+`CerebroRobotTransport` converts those messages into `RobotEvent.armTelemetry`,
+and `RobotSessionSnapshot.armTelemetry` retains only the latest sample per arm.
+
+`RobotSession.submitArmTargetIntent` can send a seven-joint target containing the
+exact authenticated controller UUID, live control-session UUID, command sequence,
+and short lease. Cerebro validates those values and its local time-limited
+controller authority before returning a disposition. Protocol v1 remains
+preview-only: every disposition has `execution_eligible=false`, and neither the
+Vision app nor the transport invokes Amber hardware. The companion Cerebro
+repository applies the calibrated B1 bounds (J1 ±2.4435, J2 ±2.3213, J3–J6
+±2.2863, J7 ±3.05 radians) and documents the complete preflight and future
+spatial-control boundary in `docs/vision-pro-arm-control.md`.

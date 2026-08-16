@@ -4,7 +4,7 @@
 
 ## Included
 
-- A visionOS 2.0 `WindowGroup` dashboard with connection, safety, motion, video, and simulator-telemetry panels. Cerebro's legacy application messages are not yet mapped into `RobotTelemetry`, so the real endpoint leaves those telemetry fields empty.
+- A visionOS 2.0 `WindowGroup` dashboard with connection, safety, motion, video, and telemetry panels. Cerebro's legacy base telemetry is not yet mapped into `RobotTelemetry`, but authenticated seven-joint Amber arm feedback appears independently in `RobotSessionSnapshot.armTelemetry`.
 - `ROBControlCore`, a pure-Foundation Swift 6 target containing transport abstractions, connection/session state, control leases, dead-man evaluation, video-domain messages, and the simulator.
 - `ROBCerebroTransport`, the Network.framework and Security.framework adapter for Cerebro pairing, discovery, reciprocal authentication, established ROBController control payloads, and the separate video service.
 - `ROBVideoPipeline`, containing the pooled synthetic source, VideoToolbox encoder, bounded simulator channel, strict H.264 receiver, and AVFoundation display path.
@@ -12,6 +12,7 @@
 - Press-and-hold spatial controls for operation without a gamepad.
 - A latched software emergency stop and explicit reset/disarm flow.
 - Demand-driven Cerebro H.264 streaming plus a complete synthetic H.264 path for offline testing.
+- Bounded `rob-arm-control/1` measured arm feedback and an identity/session/lease-bound target-preview path using exact per-joint B1 limits. Target preview never calls Amber hardware and always reports `execution_eligible=false` in protocol v1.
 
 ## Connect to Cerebro
 

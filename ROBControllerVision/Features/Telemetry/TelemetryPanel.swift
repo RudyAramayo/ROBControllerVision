@@ -1,3 +1,4 @@
+import Foundation
 import ROBControlCore
 import SwiftUI
 
@@ -50,6 +51,17 @@ struct TelemetryPanel: View {
             value: snapshot.safety.inhibitReason?.description ?? "Motion active",
             systemImage: snapshot.safety.inhibitReason == nil ? "checkmark.shield.fill" : "shield.fill"
         )
+        telemetryItem(
+            title: "Amber arms",
+            value: armTelemetrySummary,
+            systemImage: "waveform.path.ecg"
+        )
+        telemetryItem(
+            title: "Arm target gate",
+            value: snapshot.armTelemetry.lastTargetDisposition?.disposition.rawValue
+                .replacingOccurrences(of: "_", with: " ") ?? "No target submitted",
+            systemImage: "hand.raised.square"
+        )
     }
 
     private func telemetryItem(title: String, value: String, systemImage: String) -> some View {
@@ -67,5 +79,18 @@ struct TelemetryPanel: View {
                     .lineLimit(1)
             }
         }
+    }
+
+    private var armTelemetrySummary: String {
+        let left = armSummary(snapshot.armTelemetry.left, prefix: "L")
+        let right = armSummary(snapshot.armTelemetry.right, prefix: "R")
+        guard left != nil || right != nil else { return "Awaiting measured joints" }
+        return [left, right].compactMap { $0 }.joined(separator: "  •  ")
+    }
+
+    private func armSummary(_ state: RobotArmMeasuredState?, prefix: String) -> String? {
+        guard let state, let first = state.positionsRadians.first else { return nil }
+        let degrees = first * 180 / .pi
+        return "\(prefix) #\(state.sequence) J1 \(degrees.formatted(.number.precision(.fractionLength(1))))°"
     }
 }

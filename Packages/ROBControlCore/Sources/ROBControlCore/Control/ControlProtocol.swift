@@ -221,6 +221,9 @@ public enum RobotCommand: Hashable, Sendable {
     case stop(MotionInhibitReason, ControllerPosePair? = nil)
     case emergencyStop
     case resetEmergencyStop
+    /// An authenticated, leased arm target request. Cerebro protocol v1 stages
+    /// this for preview only and never translates it into a hardware command.
+    case armTargetIntent(RobotArmTargetIntent)
     case video(VideoControlMessage)
     case operatorText(OperatorTextMessage)
 }
@@ -273,6 +276,7 @@ extension RobotCommand: Codable {
         case grippers
         case torso
         case operatorText
+        case armTarget
     }
 
     private enum Kind: String, Codable {
@@ -283,6 +287,7 @@ extension RobotCommand: Codable {
         case resetEmergencyStop
         case video
         case operatorText
+        case armTargetIntent
     }
 
     public init(from decoder: any Decoder) throws {
@@ -307,6 +312,10 @@ extension RobotCommand: Codable {
             self = .emergencyStop
         case .resetEmergencyStop:
             self = .resetEmergencyStop
+        case .armTargetIntent:
+            self = .armTargetIntent(
+                try container.decode(RobotArmTargetIntent.self, forKey: .armTarget)
+            )
         case .video:
             self = .video(try container.decode(VideoControlMessage.self, forKey: .video))
         case .operatorText:
@@ -335,6 +344,9 @@ extension RobotCommand: Codable {
             try container.encode(Kind.emergencyStop, forKey: .type)
         case .resetEmergencyStop:
             try container.encode(Kind.resetEmergencyStop, forKey: .type)
+        case .armTargetIntent(let target):
+            try container.encode(Kind.armTargetIntent, forKey: .type)
+            try container.encode(target, forKey: .armTarget)
         case .video(let video):
             try container.encode(Kind.video, forKey: .type)
             try container.encode(video, forKey: .video)
@@ -355,6 +367,8 @@ public enum RobotEvent: Equatable, Sendable {
     case connected(RobotHandshake)
     case disconnected(reason: String)
     case telemetry(RobotTelemetry)
+    case armTelemetry(RobotArmMeasuredState)
+    case armTargetDisposition(RobotArmTargetDisposition)
     case commandAcknowledged(UUID)
     case safety(RobotSafetyEvent)
     case video(VideoEvent)

@@ -218,6 +218,7 @@ public actor RobotSession {
         transport = nil
         cancelPendingVideoSubscriptions(with: RobotTransportError.notConnected)
         snapshot.telemetry = nil
+        snapshot.armTelemetry = RobotArmTelemetrySnapshot()
         snapshot.videoStreams = []
         synchronizeSafetyState(inhibitReason: .disconnected)
         publish()
@@ -332,6 +333,14 @@ public actor RobotSession {
             throw RobotTransportError.invalidState("Operator text must contain 1 through 1,024 characters.")
         }
         try await send(.operatorText(OperatorTextMessage(text: trimmed, mode: mode)))
+    }
+
+    /// Sends a leased target intent to Cerebro's preview-only arm gate. This
+    /// does not assert that the target was executed; callers must inspect the
+    /// correlated `lastTargetDisposition` response.
+    public func submitArmTargetIntent(_ target: RobotArmTargetIntent) async throws {
+        guard snapshot.connection.isReady else { throw RobotTransportError.notConnected }
+        try await send(.armTargetIntent(target))
     }
 
     public func subscribeVideo(
@@ -499,6 +508,14 @@ public actor RobotSession {
             snapshot.telemetry = telemetry
             publish()
 
+        case .armTelemetry(let telemetry):
+            snapshot.armTelemetry.apply(telemetry)
+            publish()
+
+        case .armTargetDisposition(let disposition):
+            snapshot.armTelemetry.lastTargetDisposition = disposition
+            publish()
+
         case .commandAcknowledged:
             break
 
@@ -629,6 +646,7 @@ public actor RobotSession {
             failure: failure
         )
         snapshot.telemetry = nil
+        snapshot.armTelemetry = RobotArmTelemetrySnapshot()
         snapshot.videoStreams = []
         cancelPendingVideoSubscriptions(with: failure)
         synchronizeSafetyState(

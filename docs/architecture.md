@@ -126,6 +126,27 @@ authenticated _robvideo._udp / robvideo/1 connection
 
 The production subscription is H.264 `reliableStream`; QUIC datagrams are not advertised by Cerebro. Network.framework may segment the ordered QUIC stream internally, but the application receives one bounded, complete codec-configuration or AVCC access-unit message from the `RVID` framer. There is no JSON/base64 media path and no application-level datagram-fragment reassembly in this profile.
 
+## Amber arm feedback boundary
+
+Amber gateway telemetry remains owned by Cerebro. Cerebro projects its validated
+seven-joint samples onto the existing authenticated ROBControl application channel;
+the Vision client decodes them into `RobotArmMeasuredState` and publishes them in the
+newest-value session snapshot. The app's telemetry panel is currently diagnostic;
+a future RealityKit arm renderer should consume the same measured snapshot and mark
+stale feedback rather than holding an old pose as live.
+
+The reverse path transports `RobotArmTargetIntent` only. The message is bounded,
+leased, sequenced, and bound to both the paired controller identity and live session.
+Cerebro's bridge applies its independent, local, time-limited controller authority
+and returns a preview/rejection disposition. No transport or view calls the Amber
+gateway, and the v1 disposition schema makes execution eligibility permanently
+false. Cerebro also checks the exact calibrated per-joint B1 limits, current live
+session, telemetry age, seven position modes, 0.10-radian update delta,
+0.20-radian/second requested average speed, and one in-flight target per arm before
+marking a target as having passed internal preflight. Calibrated IK, continuous
+dead-man behavior, measured completion/hold-on-expiry, and the final hardware
+executor remain a later Cerebro-side layer.
+
 Video capabilities, subscription requests and responses, receiver feedback, unsubscribe, stream-ended events, and media all use `_robvideo._udp`. None of them is placed on the `_robctl._udp` connection. `RobotSession` models these as control-domain operations, while `CerebroRobotTransport` routes them to the independent physical video channel.
 
 Every video request carries the exact live control-session UUID. Cerebro authorizes the request only when that UUID is still registered to the same authenticated `operatorController`. A locally generated or stale UUID fails closed. Control disconnect, session replacement, credential revocation, video failure, scene suspension, or explicit unsubscribe closes the media channel without weakening control safety. Video loss ends active streams but deliberately leaves the authenticated control connection ready. The adapter does not hot-reconnect video or republish capabilities during that session; reconnecting the Cerebro endpoint performs a fresh video attempt.

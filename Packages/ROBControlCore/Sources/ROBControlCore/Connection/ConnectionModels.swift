@@ -185,17 +185,20 @@ public struct RobotSessionSnapshot: Equatable, Sendable {
     public var connection: RobotConnectionState
     public var safety: MotionSafetyState
     public var telemetry: RobotTelemetry?
+    public var armTelemetry: RobotArmTelemetrySnapshot
     public var videoStreams: [VideoStreamDescriptor]
 
     public init(
         connection: RobotConnectionState = .disconnected,
         safety: MotionSafetyState = MotionSafetyState(),
         telemetry: RobotTelemetry? = nil,
+        armTelemetry: RobotArmTelemetrySnapshot = RobotArmTelemetrySnapshot(),
         videoStreams: [VideoStreamDescriptor] = []
     ) {
         self.connection = connection
         self.safety = safety
         self.telemetry = telemetry
+        self.armTelemetry = armTelemetry
         self.videoStreams = videoStreams
     }
 }

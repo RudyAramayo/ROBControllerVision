@@ -238,6 +238,11 @@ public actor SimulatedRobotEndpoint: RobotTransport, RobotVideoDataTransport {
         case .operatorText:
             // The simulator acknowledges speech/text without synthesizing audio.
             break
+
+        case .armTargetIntent:
+            // The simulator has no Amber arm plant. Keep this command
+            // observation-only just like Cerebro's v1 preview gate.
+            break
         }
 
         eventContinuation?.yield(.commandAcknowledged(envelope.id))
