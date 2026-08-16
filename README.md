@@ -12,7 +12,8 @@
 - Press-and-hold spatial controls for operation without a gamepad.
 - A latched software emergency stop and explicit reset/disarm flow.
 - Demand-driven Cerebro H.264 streaming plus a complete synthetic H.264 path for offline testing.
-- Bounded `rob-arm-control/1` measured arm feedback and an identity/session/lease-bound target-preview path using exact per-joint B1 limits. Target preview never calls Amber hardware and always reports `execution_eligible=false` in protocol v1.
+- Supervised `rob-arm-control/2` Amber arm control with measured seven-joint feedback, independent time-limited Cerebro authority for each arm, independent on-screen joint controls, simultaneous paired PSVR Sense thumbstick jogging, measured completion, and priority hold commands. Arm activation and actuator-mode changes remain outside the Vision app.
+- A default-off, authenticated action-approval console for reviewing bounded Cerebro proposals, explicitly approving or rejecting them, cancelling active work, and observing Cerebro-owned measured completion for approved Amber gestures.
 
 ## Connect to Cerebro
 
@@ -31,7 +32,9 @@ Pair and connect as follows:
 4. Select **Install pairing code**. The credential and Cerebro certificate pin are stored in this Vision Pro's Keychain. The pairing status reads **Credential installed** at this point; installation alone has not authenticated Cerebro.
 5. Accept the visionOS Local Network permission prompt, then select **Connect Cerebro**.
 6. After the control connection authenticates, the pairing status reads **Connected and verified**. If Cerebro's video service also authenticated and advertised a camera, select **Subscribe** in the Robot Camera panel. The app requests the `front` camera as H.264 at up to 960 x 540, 20 fps, and 1.5 Mbit/s using `reliableStream` delivery.
-7. Arm motion, then hold a directional control or use a game controller while holding its dead-man control. Release it to stop.
+7. Select **Enable Drive Control**, then hold a directional control or use a game controller while holding its dead-man control. Release it to stop.
+8. Open **Amber Arm Control**, initialize each arm you intend to use from fresh measured feedback, and request **Enable Arm Control** separately for the left and right arms. Cerebro grants independent authorities and measured baselines, so either or both on-screen joint controls can run. With both authorities active, two connected PSVR Sense controllers can jog the matching selected joints simultaneously while both grip buttons are held.
+9. For Cerebro/Gemini action proposals, explicitly enable **Cerebro Action Approval**. Inspect each immutable, expiring proposal and choose **Approve** or **Reject**. Gesture approval authorizes one named catalog gesture; it never accepts model-supplied joint values.
 
 Each physical controller must have its own Cerebro-issued credential. Do not reuse the iPhone ROBController code or copy its Keychain item to Vision Pro. Reusing a code clones the controller identity, prevents independent revocation, and can cause Cerebro's duplicate-session protection to reject one of the devices.
 
@@ -47,7 +50,7 @@ If this is that first migrated launch, revoke the old Vision Pro entry in **Mana
 2. Select the `ROBControllerVision` scheme and a Vision Pro simulator or provisioned device.
 3. Run the app, choose **Simulator**, and select **Connect Simulator**.
 4. Select **Subscribe** to start the synthetic H.264 stream.
-5. Arm motion, then hold a directional control. Release it to stop.
+5. Select **Enable Drive Control**, then hold a directional control. Release it to stop. The simulator deliberately does not advertise or accept physical Amber arm authority.
 
 The simulator remains available after a Cerebro credential is installed; use the endpoint picker while disconnected.
 
@@ -82,6 +85,45 @@ Motion is inhibited by default. The operator must connect, arm motion, and conti
 - the operator disarms motion; or
 - the emergency stop is latched.
 
+Amber arm motion has a separate control domain that is mutually exclusive with
+drive control. The current Cerebro transport profile enables `rob-arm-control/2`;
+the simulator does not. After drive control is disarmed, Cerebro can grant
+independent, time-limited authorities for the left and right arms. Each arm keeps
+its own measured baseline, selected joint, draft, status, in-flight target, and
+authority lease. Its on-screen hold-to-move control can run independently of the
+other arm; releasing it requests an ordinary measured-position hold for that arm.
+
+Paired PSVR Sense jogging is available with the arm panel open only after both
+controllers are connected, both arm authorities are granted, both arms have
+feedback no more than 250 ms old, and all seven joints on each arm are verified in
+position mode. The left and right vertical thumbsticks jog the matching arm's
+selected joint simultaneously. A 0.15 dead zone is applied, the other six joints
+are copied from the latest measured sample, and every target remains within the B1
+limit, 0.08-radian increment, 0.20-radian/second rate, and short per-arm lease.
+Both grip buttons form one paired dead-man: releasing either grip stops both jog
+loops and requests ordinary holds for both arms while retaining their authorities,
+so motion requires a deliberate fresh two-grip hold to resume.
+
+A controller disconnect, more than 250 ms without a fresh controller sample,
+stale arm telemetry, mode/preflight loss, target timeout or send failure, scene
+loss, stop, disarm, or software E-stop uses the priority path to hold and locally
+disarm both arms. **Priority Hold Both Arms** remains available while connected.
+Network loss still requires Cerebro and the Amber gateway to enforce their
+independent per-arm lease expiry and hold behavior. This workflow is measured
+joint jogging; tracked controller poses are diagnostic data and are not converted
+into Cartesian targets or IK puppeteering.
+
+Action approval is independent and off by default. When enabled, Vision sends a
+short-lived availability hello bound to its authenticated controller identity;
+scene loss, disconnect, software E-stop, or disabling the console withdraws that
+availability and cancels any pending proposal. Requests have strict action-specific
+argument schemas and an expiry, and are shown only when addressed to this exact
+controller. `play_gesture` can name only an approved Cerebro catalog entry. After
+operator approval Cerebro owns leased execution, holds on failure, and reports
+completion only after fresh Amber feedback settles. Other bounded actions remain
+manually supervised and expose explicit **Confirm Completed** / **Report Failed**
+controls.
+
 The simulator independently enforces a receive-side watchdog. Cerebro remains the authoritative real-robot receiver and must independently stop on stale or disconnected controller input; an app-only dead-man cannot stop a robot after total network loss. The software stop control supplements and never replaces a physical, independently wired emergency stop.
 
 While a game-controller dead-man is held, ROBControllerVision also recenters on
@@ -91,19 +133,20 @@ the active scene, or disconnecting stops publishing neck demands. Cerebro applie
 them only from its fresh master-controller snapshot and mirrors the accepted
 pan/tilt on its SceneKit diagnostic robot.
 
-PSVR Sense index triggers are reserved for the matching Amber grippers: pressed
-requests closed and released requests open. Both VR grip buttons must remain held
-as the continuous dead-man gesture, and the app's **Arm Motion** control must also
-be unlocked. A conventional gamepad uses A or both shoulder buttons for the
-continuous hold. Cerebro emits gripper operations only on state transitions and
-labels them as commanded rather than measured feedback.
+PSVR Sense index triggers are reserved for the matching Amber grippers: trigger
+edges request bounded `hold` or `release` actions at the selected raw vendor
+intensity. Both VR grip buttons must remain held as the gripper dead-man gesture;
+this direct gripper lane does not require **Enable Drive Control**. Cerebro and the
+gateway require a session-local calibration acknowledgement before control, emit
+operations only on state transitions, and label every result as commanded rather
+than measured position, force, or completion feedback.
 
 With the same dead-man hold, Vision Pro yaw beyond the camera neck's 60-degree
 range produces a bounded rotating-torso demand. Cerebro owns the Pololu Tic USB
 safety sequence and position conversion; ROBControllerVision never sends shell
 commands or confuses this rotating plate with ROB's separate lean LACT.
 
-On visionOS, game-controller delivery depends on the app receiving controller events. Missing fresh callbacks are treated as expired input instead of replaying a retained thumbstick value. Validate controller delivery, gaze/focus behavior, the Cerebro watchdog, and the physical stop on the target hardware before real-robot use.
+On visionOS, game-controller delivery depends on the app receiving controller events. The current physical input profile is reread every 50 ms so a deliberately held grip/stick renews the dead-man sample; if that polling/callback path stops for more than 250 ms, paired arm jogging expires and takes the priority-hold path. Validate controller delivery, gaze/focus behavior, the Cerebro watchdog, and the physical stop on the target hardware before real-robot use.
 
 ## Network and video implementation
 

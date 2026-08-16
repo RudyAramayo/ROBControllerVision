@@ -30,16 +30,20 @@ public struct RobotArmTargetIntent: Codable, Hashable, Sendable {
     public let positionsRadians: [Double]
     public let durationSeconds: Double
 
+    public static func containsPositions(_ positionsRadians: [Double]) -> Bool {
+        positionsRadians.count == jointBoundsRadians.count
+            && zip(positionsRadians, jointBoundsRadians).allSatisfy { position, bounds in
+                position.isFinite && bounds.contains(position)
+            }
+    }
+
     public init?(
         arm: RobotArmSide,
         source: RobotArmTargetSource,
         positionsRadians: [Double],
         durationSeconds: Double
     ) {
-        guard positionsRadians.count == Self.jointBoundsRadians.count,
-            zip(positionsRadians, Self.jointBoundsRadians).allSatisfy({ position, bounds in
-                position.isFinite && bounds.contains(position)
-            }),
+        guard Self.containsPositions(positionsRadians),
             durationSeconds.isFinite,
             (0.65 ... 10).contains(durationSeconds)
         else { return nil }
@@ -83,6 +87,7 @@ public struct RobotArmMeasuredState: Codable, Hashable, Sendable {
     public let velocitiesRadiansPerSecond: [Double]
     public let currents: [Double]
     public let statuses: [Double]
+    public let modes: [Int]
 
     public init?(
         messageID: UUID = UUID(),
@@ -93,7 +98,8 @@ public struct RobotArmMeasuredState: Codable, Hashable, Sendable {
         positionsRadians: [Double],
         velocitiesRadiansPerSecond: [Double],
         currents: [Double],
-        statuses: [Double]
+        statuses: [Double],
+        modes: [Int]
     ) {
         guard sequence > 0,
             sampledAtUnixMilliseconds > 0,
@@ -102,7 +108,8 @@ public struct RobotArmMeasuredState: Codable, Hashable, Sendable {
             Self.validVector(positionsRadians, absoluteLimit: 4 * .pi),
             Self.validVector(velocitiesRadiansPerSecond, absoluteLimit: 100),
             Self.validVector(currents, absoluteLimit: 1_000),
-            Self.validVector(statuses, absoluteLimit: 1_000_000_000)
+            Self.validVector(statuses, absoluteLimit: 1_000_000_000),
+            modes.count == RobotArmTargetIntent.jointCount
         else { return nil }
         self.messageID = messageID
         self.arm = arm
@@ -113,6 +120,7 @@ public struct RobotArmMeasuredState: Codable, Hashable, Sendable {
         self.velocitiesRadiansPerSecond = velocitiesRadiansPerSecond
         self.currents = currents
         self.statuses = statuses
+        self.modes = modes
     }
 
     public var sampledAt: Date {
@@ -131,7 +139,7 @@ public struct RobotArmMeasuredState: Codable, Hashable, Sendable {
         case sampleAgeMilliseconds = "sample_age_ms"
         case positionsRadians = "positions_rad"
         case velocitiesRadiansPerSecond = "velocities_rad_s"
-        case currents, statuses
+        case currents, statuses, modes
     }
 
     public init(from decoder: any Decoder) throws {
@@ -154,7 +162,8 @@ public struct RobotArmMeasuredState: Codable, Hashable, Sendable {
                 forKey: .velocitiesRadiansPerSecond
             ),
             currents: try container.decode([Double].self, forKey: .currents),
-            statuses: try container.decode([Double].self, forKey: .statuses)
+            statuses: try container.decode([Double].self, forKey: .statuses),
+            modes: try container.decode([Int].self, forKey: .modes)
         ) else {
             throw DecodingError.dataCorruptedError(
                 forKey: .positionsRadians,
@@ -167,7 +176,14 @@ public struct RobotArmMeasuredState: Codable, Hashable, Sendable {
 }
 
 public enum RobotArmTargetDispositionKind: String, Codable, CaseIterable, Hashable, Sendable {
-    case acceptedPreviewOnly = "accepted_preview_only"
+    case acceptedForExecution = "accepted_for_execution"
+    case executing
+    case completedMeasured = "completed_measured"
+    case cancelledHeld = "cancelled_held"
+    case leaseExpiredHeld = "lease_expired_held"
+    case holdConfirmed = "hold_confirmed"
+    case holdUnconfirmed = "hold_unconfirmed"
+    case failed
     case rejectedAuthorityDisabled = "rejected_authority_disabled"
     case rejectedExpired = "rejected_expired"
     case rejectedIdentityMismatch = "rejected_identity_mismatch"
@@ -179,48 +195,91 @@ public enum RobotArmTargetDispositionKind: String, Codable, CaseIterable, Hashab
     case rejectedSpeedLimit = "rejected_speed_limit"
     case rejectedArmBusy = "rejected_arm_busy"
     case rejectedInvalid = "rejected_invalid"
+
+    public var executionEligible: Bool {
+        switch self {
+        case .acceptedForExecution, .executing, .completedMeasured:
+            true
+        default:
+            false
+        }
+    }
+
+    public var isTerminal: Bool {
+        switch self {
+        case .acceptedForExecution, .executing:
+            false
+        default:
+            true
+        }
+    }
 }
 
 public struct RobotArmTargetDisposition: Codable, Hashable, Sendable {
     public let messageID: UUID
     public let targetMessageID: UUID
     public let recipientID: UUID
+    public let sessionID: UUID
+    public let arm: RobotArmSide
     public let receivedAtUnixMilliseconds: Int64
     public let disposition: RobotArmTargetDispositionKind
     public let executionEligible: Bool
+    public let terminal: Bool
     public let detail: String
+    public let measuredPositionsRadians: [Double]?
+    public let maximumErrorRadians: Double?
 
     public init?(
         messageID: UUID = UUID(),
         targetMessageID: UUID,
         recipientID: UUID,
+        sessionID: UUID,
+        arm: RobotArmSide,
         receivedAtUnixMilliseconds: Int64,
         disposition: RobotArmTargetDispositionKind,
         executionEligible: Bool,
-        detail: String
+        terminal: Bool,
+        detail: String,
+        measuredPositionsRadians: [Double]? = nil,
+        maximumErrorRadians: Double? = nil
     ) {
         guard receivedAtUnixMilliseconds > 0,
-            executionEligible == false,
+            executionEligible == disposition.executionEligible,
+            terminal == disposition.isTerminal,
             !detail.isEmpty,
-            detail.count <= 256
+            detail.count <= 256,
+            measuredPositionsRadians.map({
+                $0.count == RobotArmTargetIntent.jointCount
+                    && $0.allSatisfy { $0.isFinite && abs($0) <= 4 * .pi }
+            }) ?? true,
+            maximumErrorRadians.map({ $0.isFinite && $0 >= 0 }) ?? true
         else { return nil }
         self.messageID = messageID
         self.targetMessageID = targetMessageID
         self.recipientID = recipientID
+        self.sessionID = sessionID
+        self.arm = arm
         self.receivedAtUnixMilliseconds = receivedAtUnixMilliseconds
         self.disposition = disposition
-        self.executionEligible = false
+        self.executionEligible = executionEligible
+        self.terminal = terminal
         self.detail = detail
+        self.measuredPositionsRadians = measuredPositionsRadians
+        self.maximumErrorRadians = maximumErrorRadians
     }
 
     private enum CodingKeys: String, CodingKey {
         case messageID = "message_id"
         case targetMessageID = "target_message_id"
         case recipientID = "recipient_id"
+        case sessionID = "session_id"
+        case arm
         case receivedAtUnixMilliseconds = "received_at_unix_ms"
         case disposition
         case executionEligible = "execution_eligible"
-        case detail
+        case terminal, detail
+        case measuredPositionsRadians = "measured_positions_rad"
+        case maximumErrorRadians = "max_error_rad"
     }
 
     public init(from decoder: any Decoder) throws {
@@ -229,6 +288,8 @@ public struct RobotArmTargetDisposition: Codable, Hashable, Sendable {
             messageID: try container.decode(UUID.self, forKey: .messageID),
             targetMessageID: try container.decode(UUID.self, forKey: .targetMessageID),
             recipientID: try container.decode(UUID.self, forKey: .recipientID),
+            sessionID: try container.decode(UUID.self, forKey: .sessionID),
+            arm: try container.decode(RobotArmSide.self, forKey: .arm),
             receivedAtUnixMilliseconds: try container.decode(
                 Int64.self,
                 forKey: .receivedAtUnixMilliseconds
@@ -238,12 +299,140 @@ public struct RobotArmTargetDisposition: Codable, Hashable, Sendable {
                 forKey: .disposition
             ),
             executionEligible: try container.decode(Bool.self, forKey: .executionEligible),
-            detail: try container.decode(String.self, forKey: .detail)
+            terminal: try container.decode(Bool.self, forKey: .terminal),
+            detail: try container.decode(String.self, forKey: .detail),
+            measuredPositionsRadians: try container.decodeIfPresent(
+                [Double].self,
+                forKey: .measuredPositionsRadians
+            ),
+            maximumErrorRadians: try container.decodeIfPresent(
+                Double.self,
+                forKey: .maximumErrorRadians
+            )
         ) else {
             throw DecodingError.dataCorruptedError(
                 forKey: .executionEligible,
                 in: container,
-                debugDescription: "Arm protocol v1 dispositions must remain preview-only."
+                debugDescription: "Arm disposition flags or measured feedback were inconsistent."
+            )
+        }
+        self = value
+    }
+}
+
+public enum RobotArmAuthorityOperation: String, Codable, CaseIterable, Hashable, Sendable {
+    case acquire
+    case release
+}
+
+public enum RobotArmAuthorityStateKind: String, Codable, CaseIterable, Hashable, Sendable {
+    case granted
+    case released
+    case rejected
+    case expired
+}
+
+public struct RobotArmAuthorityState: Codable, Hashable, Sendable {
+    public let messageID: UUID
+    public let requestMessageID: UUID
+    public let recipientID: UUID
+    public let sessionID: UUID
+    public let arm: RobotArmSide
+    public let state: RobotArmAuthorityStateKind
+    public let authorityID: UUID?
+    public let expiresAtUnixMilliseconds: Int64
+    public let detail: String
+    public let baselinePositionsRadians: [Double]
+    public let baselineSequence: UInt64
+    public let modes: [Int]
+
+    public init?(
+        messageID: UUID = UUID(),
+        requestMessageID: UUID,
+        recipientID: UUID,
+        sessionID: UUID,
+        arm: RobotArmSide,
+        state: RobotArmAuthorityStateKind,
+        authorityID: UUID?,
+        expiresAtUnixMilliseconds: Int64,
+        detail: String,
+        baselinePositionsRadians: [Double],
+        baselineSequence: UInt64,
+        modes: [Int]
+    ) {
+        let hasValidBaseline = RobotArmTargetIntent.containsPositions(baselinePositionsRadians)
+        guard expiresAtUnixMilliseconds >= 0,
+            !detail.isEmpty,
+            detail.count <= 256,
+            baselinePositionsRadians.isEmpty || hasValidBaseline,
+            modes.isEmpty || modes.count == RobotArmTargetIntent.jointCount
+        else { return nil }
+        if state == .granted {
+            guard authorityID != nil,
+                expiresAtUnixMilliseconds > 0,
+                hasValidBaseline,
+                baselineSequence > 0,
+                modes.count == RobotArmTargetIntent.jointCount
+            else { return nil }
+        }
+        self.messageID = messageID
+        self.requestMessageID = requestMessageID
+        self.recipientID = recipientID
+        self.sessionID = sessionID
+        self.arm = arm
+        self.state = state
+        self.authorityID = authorityID
+        self.expiresAtUnixMilliseconds = expiresAtUnixMilliseconds
+        self.detail = detail
+        self.baselinePositionsRadians = baselinePositionsRadians
+        self.baselineSequence = baselineSequence
+        self.modes = modes
+    }
+
+    public var expiresAt: Date {
+        Date(timeIntervalSince1970: Double(expiresAtUnixMilliseconds) / 1_000)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case messageID = "message_id"
+        case requestMessageID = "request_message_id"
+        case recipientID = "recipient_id"
+        case sessionID = "session_id"
+        case arm, state
+        case authorityID = "authority_id"
+        case expiresAtUnixMilliseconds = "expires_at_unix_ms"
+        case detail
+        case baselinePositionsRadians = "baseline_positions_rad"
+        case baselineSequence = "baseline_sequence"
+        case modes
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        guard let value = Self.init(
+            messageID: try container.decode(UUID.self, forKey: .messageID),
+            requestMessageID: try container.decode(UUID.self, forKey: .requestMessageID),
+            recipientID: try container.decode(UUID.self, forKey: .recipientID),
+            sessionID: try container.decode(UUID.self, forKey: .sessionID),
+            arm: try container.decode(RobotArmSide.self, forKey: .arm),
+            state: try container.decode(RobotArmAuthorityStateKind.self, forKey: .state),
+            authorityID: try container.decodeIfPresent(UUID.self, forKey: .authorityID),
+            expiresAtUnixMilliseconds: try container.decode(
+                Int64.self,
+                forKey: .expiresAtUnixMilliseconds
+            ),
+            detail: try container.decode(String.self, forKey: .detail),
+            baselinePositionsRadians: try container.decode(
+                [Double].self,
+                forKey: .baselinePositionsRadians
+            ),
+            baselineSequence: try container.decode(UInt64.self, forKey: .baselineSequence),
+            modes: try container.decode([Int].self, forKey: .modes)
+        ) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .state,
+                in: container,
+                debugDescription: "Arm authority state was internally inconsistent."
             )
         }
         self = value
@@ -257,6 +446,8 @@ public struct RobotArmTargetIntentWireMessage: Codable, Hashable, Sendable {
     public let sequence: UInt64
     public let issuedAtUnixMilliseconds: Int64
     public let leaseMilliseconds: UInt32
+    public let authorityID: UUID
+    public let deadManIsHeld: Bool
     public let target: RobotArmTargetIntent
 
     private enum CodingKeys: String, CodingKey {
@@ -266,6 +457,8 @@ public struct RobotArmTargetIntentWireMessage: Codable, Hashable, Sendable {
         case sequence
         case issuedAtUnixMilliseconds = "issued_at_unix_ms"
         case leaseMilliseconds = "lease_ms"
+        case authorityID = "authority_id"
+        case deadManIsHeld = "dead_man_held"
         case arm, source
         case positionsRadians = "positions_rad"
         case durationSeconds = "duration_s"
@@ -278,6 +471,8 @@ public struct RobotArmTargetIntentWireMessage: Codable, Hashable, Sendable {
         sequence: UInt64,
         issuedAtUnixMilliseconds: Int64,
         leaseMilliseconds: UInt32,
+        authorityID: UUID,
+        deadManIsHeld: Bool,
         target: RobotArmTargetIntent
     ) {
         self.messageID = messageID
@@ -286,6 +481,8 @@ public struct RobotArmTargetIntentWireMessage: Codable, Hashable, Sendable {
         self.sequence = sequence
         self.issuedAtUnixMilliseconds = issuedAtUnixMilliseconds
         self.leaseMilliseconds = leaseMilliseconds
+        self.authorityID = authorityID
+        self.deadManIsHeld = deadManIsHeld
         self.target = target
     }
 
@@ -312,6 +509,8 @@ public struct RobotArmTargetIntentWireMessage: Codable, Hashable, Sendable {
             forKey: .issuedAtUnixMilliseconds
         )
         leaseMilliseconds = try container.decode(UInt32.self, forKey: .leaseMilliseconds)
+        authorityID = try container.decode(UUID.self, forKey: .authorityID)
+        deadManIsHeld = try container.decode(Bool.self, forKey: .deadManIsHeld)
         self.target = target
     }
 
@@ -323,6 +522,8 @@ public struct RobotArmTargetIntentWireMessage: Codable, Hashable, Sendable {
         try container.encode(sequence, forKey: .sequence)
         try container.encode(issuedAtUnixMilliseconds, forKey: .issuedAtUnixMilliseconds)
         try container.encode(leaseMilliseconds, forKey: .leaseMilliseconds)
+        try container.encode(authorityID, forKey: .authorityID)
+        try container.encode(deadManIsHeld, forKey: .deadManIsHeld)
         try container.encode(target.arm, forKey: .arm)
         try container.encode(target.source, forKey: .source)
         try container.encode(target.positionsRadians, forKey: .positionsRadians)
@@ -330,9 +531,57 @@ public struct RobotArmTargetIntentWireMessage: Codable, Hashable, Sendable {
     }
 }
 
+public struct RobotArmAuthorityIntentWireMessage: Codable, Hashable, Sendable {
+    public let messageID: UUID
+    public let senderID: UUID
+    public let sessionID: UUID
+    public let sequence: UInt64
+    public let issuedAtUnixMilliseconds: Int64
+    public let leaseMilliseconds: UInt32
+    public let arm: RobotArmSide
+    public let operation: RobotArmAuthorityOperation
+
+    enum CodingKeys: String, CodingKey {
+        case messageID = "message_id"
+        case senderID = "sender_id"
+        case sessionID = "session_id"
+        case sequence
+        case issuedAtUnixMilliseconds = "issued_at_unix_ms"
+        case leaseMilliseconds = "lease_ms"
+        case arm, operation
+    }
+}
+
+public struct RobotArmHoldIntentWireMessage: Codable, Hashable, Sendable {
+    public let messageID: UUID
+    public let senderID: UUID
+    public let sessionID: UUID
+    public let sequence: UInt64
+    public let issuedAtUnixMilliseconds: Int64
+    public let leaseMilliseconds: UInt32
+    public let arm: RobotArmSide
+    public let authorityID: UUID?
+    public let reason: String
+
+    enum CodingKeys: String, CodingKey {
+        case messageID = "message_id"
+        case senderID = "sender_id"
+        case sessionID = "session_id"
+        case sequence
+        case issuedAtUnixMilliseconds = "issued_at_unix_ms"
+        case leaseMilliseconds = "lease_ms"
+        case arm
+        case authorityID = "authority_id"
+        case reason
+    }
+}
+
 public enum RobotArmWireDecodedMessage: Hashable, Sendable {
     case measuredState(RobotArmMeasuredState)
     case targetIntent(RobotArmTargetIntentWireMessage)
+    case authorityIntent(RobotArmAuthorityIntentWireMessage)
+    case authorityState(RobotArmAuthorityState)
+    case holdIntent(RobotArmHoldIntentWireMessage)
     case targetDisposition(RobotArmTargetDisposition)
 }
 
@@ -345,8 +594,8 @@ public enum RobotArmWireError: Error, Equatable, Sendable {
 }
 
 public enum RobotArmWireCodec {
-    public static let protocolName = "rob-arm-control/1"
-    public static let schemaVersion = 1
+    public static let protocolName = "rob-arm-control/2"
+    public static let schemaVersion = 2
     public static let maximumMessageBytes = 8 * 1_024
 
     private struct WireEnvelope<T: Codable & Hashable & Sendable>: Codable, Hashable, Sendable {
@@ -388,16 +637,31 @@ public enum RobotArmWireCodec {
     private static let measuredKeys: Set<String> = [
         "protocol", "schema_version", "type", "message_id", "arm", "sequence",
         "sampled_at_unix_ms", "sample_age_ms", "positions_rad", "velocities_rad_s",
-        "currents", "statuses",
+        "currents", "statuses", "modes",
     ]
     private static let targetKeys: Set<String> = [
         "protocol", "schema_version", "type", "message_id", "sender_id", "session_id",
         "sequence", "issued_at_unix_ms", "lease_ms", "arm", "source", "positions_rad",
-        "duration_s",
+        "duration_s", "authority_id", "dead_man_held",
+    ]
+    private static let authorityIntentKeys: Set<String> = [
+        "protocol", "schema_version", "type", "message_id", "sender_id", "session_id",
+        "sequence", "issued_at_unix_ms", "lease_ms", "arm", "operation",
+    ]
+    private static let authorityStateKeys: Set<String> = [
+        "protocol", "schema_version", "type", "message_id", "request_message_id",
+        "recipient_id", "session_id", "arm", "state", "authority_id",
+        "expires_at_unix_ms", "detail", "baseline_positions_rad", "baseline_sequence",
+        "modes",
+    ]
+    private static let holdIntentKeys: Set<String> = [
+        "protocol", "schema_version", "type", "message_id", "sender_id", "session_id",
+        "sequence", "issued_at_unix_ms", "lease_ms", "arm", "authority_id", "reason",
     ]
     private static let dispositionKeys: Set<String> = [
         "protocol", "schema_version", "type", "message_id", "target_message_id",
-        "recipient_id", "received_at_unix_ms", "disposition", "execution_eligible", "detail",
+        "recipient_id", "session_id", "arm", "received_at_unix_ms", "disposition",
+        "execution_eligible", "terminal", "detail", "measured_positions_rad", "max_error_rad",
     ]
 
     /// Returns nil for unrelated ROBControl application data.
@@ -419,7 +683,7 @@ public enum RobotArmWireCodec {
         do {
             switch type {
             case "measured_state":
-                guard Set(dictionary.keys).isSubset(of: measuredKeys) else {
+                guard Set(dictionary.keys) == measuredKeys else {
                     throw RobotArmWireError.unexpectedFields
                 }
                 let envelope = try decoder.decode(
@@ -428,7 +692,7 @@ public enum RobotArmWireCodec {
                 )
                 return .measuredState(envelope.payload)
             case "target_intent":
-                guard Set(dictionary.keys).isSubset(of: targetKeys) else {
+                guard Set(dictionary.keys) == targetKeys else {
                     throw RobotArmWireError.unexpectedFields
                 }
                 let envelope = try decoder.decode(
@@ -440,8 +704,48 @@ public enum RobotArmWireCodec {
                     nowUnixMilliseconds: nowUnixMilliseconds ?? currentUnixMilliseconds()
                 )
                 return .targetIntent(envelope.payload)
+            case "authority_intent":
+                guard Set(dictionary.keys) == authorityIntentKeys else {
+                    throw RobotArmWireError.unexpectedFields
+                }
+                let envelope = try decoder.decode(
+                    WireEnvelope<RobotArmAuthorityIntentWireMessage>.self,
+                    from: data
+                )
+                try validateAuthorityWire(
+                    envelope.payload,
+                    nowUnixMilliseconds: nowUnixMilliseconds ?? currentUnixMilliseconds()
+                )
+                return .authorityIntent(envelope.payload)
+            case "authority_state":
+                guard Set(dictionary.keys).isSubset(of: authorityStateKeys),
+                    authorityStateKeys.subtracting(["authority_id"]).isSubset(of: dictionary.keys)
+                else { throw RobotArmWireError.unexpectedFields }
+                let envelope = try decoder.decode(
+                    WireEnvelope<RobotArmAuthorityState>.self,
+                    from: data
+                )
+                return .authorityState(envelope.payload)
+            case "hold_intent":
+                guard Set(dictionary.keys).isSubset(of: holdIntentKeys),
+                    holdIntentKeys.subtracting(["authority_id"]).isSubset(of: dictionary.keys)
+                else { throw RobotArmWireError.unexpectedFields }
+                let envelope = try decoder.decode(
+                    WireEnvelope<RobotArmHoldIntentWireMessage>.self,
+                    from: data
+                )
+                try validateHoldWire(
+                    envelope.payload,
+                    nowUnixMilliseconds: nowUnixMilliseconds ?? currentUnixMilliseconds()
+                )
+                return .holdIntent(envelope.payload)
             case "target_disposition":
-                guard Set(dictionary.keys).isSubset(of: dispositionKeys) else {
+                let optionalDispositionKeys: Set<String> = [
+                    "measured_positions_rad", "max_error_rad",
+                ]
+                guard Set(dictionary.keys).isSubset(of: dispositionKeys),
+                    dispositionKeys.subtracting(optionalDispositionKeys).isSubset(of: dictionary.keys)
+                else {
                     throw RobotArmWireError.unexpectedFields
                 }
                 let envelope = try decoder.decode(
@@ -467,6 +771,8 @@ public enum RobotArmWireCodec {
         sequence: UInt64,
         issuedAtUnixMilliseconds: Int64,
         leaseMilliseconds: UInt32,
+        authorityID: UUID,
+        deadManIsHeld: Bool,
         nowUnixMilliseconds: Int64? = nil
     ) throws -> Data {
         let message = RobotArmTargetIntentWireMessage(
@@ -476,6 +782,8 @@ public enum RobotArmWireCodec {
             sequence: sequence,
             issuedAtUnixMilliseconds: issuedAtUnixMilliseconds,
             leaseMilliseconds: leaseMilliseconds,
+            authorityID: authorityID,
+            deadManIsHeld: deadManIsHeld,
             target: target
         )
         try validateTargetWire(
@@ -485,8 +793,70 @@ public enum RobotArmWireCodec {
         return try encodeBounded(WireEnvelope(type: "target_intent", payload: message))
     }
 
+    public static func encodeAuthorityIntent(
+        arm: RobotArmSide,
+        operation: RobotArmAuthorityOperation,
+        messageID: UUID,
+        senderID: UUID,
+        sessionID: UUID,
+        sequence: UInt64,
+        issuedAtUnixMilliseconds: Int64,
+        leaseMilliseconds: UInt32,
+        nowUnixMilliseconds: Int64? = nil
+    ) throws -> Data {
+        let message = RobotArmAuthorityIntentWireMessage(
+            messageID: messageID,
+            senderID: senderID,
+            sessionID: sessionID,
+            sequence: sequence,
+            issuedAtUnixMilliseconds: issuedAtUnixMilliseconds,
+            leaseMilliseconds: leaseMilliseconds,
+            arm: arm,
+            operation: operation
+        )
+        try validateAuthorityWire(
+            message,
+            nowUnixMilliseconds: nowUnixMilliseconds ?? currentUnixMilliseconds()
+        )
+        return try encodeBounded(WireEnvelope(type: "authority_intent", payload: message))
+    }
+
+    public static func encodeHoldIntent(
+        arm: RobotArmSide,
+        authorityID: UUID?,
+        reason: String,
+        messageID: UUID,
+        senderID: UUID,
+        sessionID: UUID,
+        sequence: UInt64,
+        issuedAtUnixMilliseconds: Int64,
+        leaseMilliseconds: UInt32,
+        nowUnixMilliseconds: Int64? = nil
+    ) throws -> Data {
+        let message = RobotArmHoldIntentWireMessage(
+            messageID: messageID,
+            senderID: senderID,
+            sessionID: sessionID,
+            sequence: sequence,
+            issuedAtUnixMilliseconds: issuedAtUnixMilliseconds,
+            leaseMilliseconds: leaseMilliseconds,
+            arm: arm,
+            authorityID: authorityID,
+            reason: reason
+        )
+        try validateHoldWire(
+            message,
+            nowUnixMilliseconds: nowUnixMilliseconds ?? currentUnixMilliseconds()
+        )
+        return try encodeBounded(WireEnvelope(type: "hold_intent", payload: message))
+    }
+
     public static func encodeMeasuredState(_ state: RobotArmMeasuredState) throws -> Data {
         try encodeBounded(WireEnvelope(type: "measured_state", payload: state))
+    }
+
+    public static func encodeAuthorityState(_ state: RobotArmAuthorityState) throws -> Data {
+        try encodeBounded(WireEnvelope(type: "authority_state", payload: state))
     }
 
     public static func encodeTargetDisposition(
@@ -501,14 +871,49 @@ public enum RobotArmWireCodec {
     ) throws {
         guard message.sequence > 0,
             message.issuedAtUnixMilliseconds > 0,
-            (50 ... 1_000).contains(message.leaseMilliseconds),
-            message.issuedAtUnixMilliseconds <= nowUnixMilliseconds + 5_000
+            (50 ... 1_500).contains(message.leaseMilliseconds),
+            message.issuedAtUnixMilliseconds <= nowUnixMilliseconds + 5_000,
+            message.deadManIsHeld
         else { throw RobotArmWireError.invalid("Invalid target sequence, timestamp, or lease.") }
         let expiry = message.issuedAtUnixMilliseconds.addingReportingOverflow(
             Int64(message.leaseMilliseconds)
         )
         guard !expiry.overflow, nowUnixMilliseconds <= expiry.partialValue else {
             throw RobotArmWireError.invalid("The target lease expired.")
+        }
+    }
+
+    private static func validateAuthorityWire(
+        _ message: RobotArmAuthorityIntentWireMessage,
+        nowUnixMilliseconds: Int64
+    ) throws {
+        let validLease = switch message.operation {
+        case .acquire: (60_000 ... 600_000).contains(message.leaseMilliseconds)
+        case .release: message.leaseMilliseconds == 1_000
+        }
+        guard message.sequence > 0,
+            message.issuedAtUnixMilliseconds > 0,
+            validLease,
+            message.issuedAtUnixMilliseconds <= nowUnixMilliseconds + 5_000
+        else { throw RobotArmWireError.invalid("Invalid authority sequence, timestamp, or lease.") }
+    }
+
+    private static func validateHoldWire(
+        _ message: RobotArmHoldIntentWireMessage,
+        nowUnixMilliseconds: Int64
+    ) throws {
+        guard message.sequence > 0,
+            message.issuedAtUnixMilliseconds > 0,
+            (50 ... 1_500).contains(message.leaseMilliseconds),
+            message.issuedAtUnixMilliseconds <= nowUnixMilliseconds + 5_000,
+            !message.reason.isEmpty,
+            message.reason.count <= 128
+        else { throw RobotArmWireError.invalid("Invalid hold sequence, timestamp, lease, or reason.") }
+        let expiry = message.issuedAtUnixMilliseconds.addingReportingOverflow(
+            Int64(message.leaseMilliseconds)
+        )
+        guard !expiry.overflow, nowUnixMilliseconds <= expiry.partialValue else {
+            throw RobotArmWireError.invalid("The hold lease expired.")
         }
     }
 
@@ -527,25 +932,106 @@ public enum RobotArmWireCodec {
     }
 }
 
+public struct RobotArmControlSnapshot: Equatable, Sendable {
+    public var authorityState: RobotArmAuthorityState?
+    public var localControlIsArmed: Bool
+    public var pendingAuthorityRequestID: UUID?
+    public var activeTargetMessageID: UUID?
+    public var activeTargetSentAtUptime: TimeInterval?
+    public var pendingHoldMessageID: UUID?
+    public var lastDisposition: RobotArmTargetDisposition?
+
+    public init(
+        authorityState: RobotArmAuthorityState? = nil,
+        localControlIsArmed: Bool = false,
+        pendingAuthorityRequestID: UUID? = nil,
+        activeTargetMessageID: UUID? = nil,
+        activeTargetSentAtUptime: TimeInterval? = nil,
+        pendingHoldMessageID: UUID? = nil,
+        lastDisposition: RobotArmTargetDisposition? = nil
+    ) {
+        self.authorityState = authorityState
+        self.localControlIsArmed = localControlIsArmed
+        self.pendingAuthorityRequestID = pendingAuthorityRequestID
+        self.activeTargetMessageID = activeTargetMessageID
+        self.activeTargetSentAtUptime = activeTargetSentAtUptime
+        self.pendingHoldMessageID = pendingHoldMessageID
+        self.lastDisposition = lastDisposition
+    }
+
+    public var authorityID: UUID? {
+        guard authorityState?.state == .granted,
+            authorityState?.expiresAt.timeIntervalSinceNow ?? 0 > 0
+        else { return nil }
+        return authorityState?.authorityID
+    }
+}
+
 public struct RobotArmTelemetrySnapshot: Equatable, Sendable {
     public var left: RobotArmMeasuredState?
     public var right: RobotArmMeasuredState?
+    public var leftReceivedAtUptime: TimeInterval?
+    public var rightReceivedAtUptime: TimeInterval?
+    public var leftControl: RobotArmControlSnapshot
+    public var rightControl: RobotArmControlSnapshot
     public var lastTargetDisposition: RobotArmTargetDisposition?
 
     public init(
         left: RobotArmMeasuredState? = nil,
         right: RobotArmMeasuredState? = nil,
+        leftReceivedAtUptime: TimeInterval? = nil,
+        rightReceivedAtUptime: TimeInterval? = nil,
+        leftControl: RobotArmControlSnapshot = RobotArmControlSnapshot(),
+        rightControl: RobotArmControlSnapshot = RobotArmControlSnapshot(),
         lastTargetDisposition: RobotArmTargetDisposition? = nil
     ) {
         self.left = left
         self.right = right
+        self.leftReceivedAtUptime = leftReceivedAtUptime
+        self.rightReceivedAtUptime = rightReceivedAtUptime
+        self.leftControl = leftControl
+        self.rightControl = rightControl
         self.lastTargetDisposition = lastTargetDisposition
     }
 
-    public mutating func apply(_ state: RobotArmMeasuredState) {
+    public mutating func apply(
+        _ state: RobotArmMeasuredState,
+        receivedAtUptime: TimeInterval = ProcessInfo.processInfo.systemUptime
+    ) {
         switch state.arm {
-        case .left: left = state
-        case .right: right = state
+        case .left:
+            guard left.map({ state.sequence > $0.sequence }) ?? true else { return }
+            left = state
+            leftReceivedAtUptime = receivedAtUptime
+        case .right:
+            guard right.map({ state.sequence > $0.sequence }) ?? true else { return }
+            right = state
+            rightReceivedAtUptime = receivedAtUptime
         }
+    }
+
+    public func measuredState(for arm: RobotArmSide) -> RobotArmMeasuredState? {
+        arm == .left ? left : right
+    }
+
+    public func controlState(for arm: RobotArmSide) -> RobotArmControlSnapshot {
+        arm == .left ? leftControl : rightControl
+    }
+
+    public mutating func updateControlState(
+        for arm: RobotArmSide,
+        _ update: (inout RobotArmControlSnapshot) -> Void
+    ) {
+        if arm == .left { update(&leftControl) } else { update(&rightControl) }
+    }
+
+    public func effectiveSampleAgeMilliseconds(
+        for arm: RobotArmSide,
+        nowUptime: TimeInterval = ProcessInfo.processInfo.systemUptime
+    ) -> Double? {
+        guard let state = measuredState(for: arm) else { return nil }
+        let receivedAt = arm == .left ? leftReceivedAtUptime : rightReceivedAtUptime
+        guard let receivedAt else { return nil }
+        return state.sampleAgeMilliseconds + max(0, nowUptime - receivedAt) * 1_000
     }
 }

@@ -112,6 +112,7 @@ public actor CerebroRobotTransport: RobotTransport, RobotVideoDataTransport {
                     // The network stop below brakes and releases authority; the independently
                     // wired physical emergency stop remains the definitive emergency mechanism.
                     supportsEmergencyStop: false,
+                    supportsArmControlExecution: true,
                     cameras: cameras
                 ),
                 safetyState: MotionSafetyState(
@@ -208,9 +209,10 @@ public actor CerebroRobotTransport: RobotTransport, RobotVideoDataTransport {
             // Resetting the app latch deliberately leaves motion disarmed until a new arm request.
             break
 
-        case .armTargetIntent(let target):
-            let data = try RobotArmWireCodec.encodeTargetIntent(
-                target,
+        case .armAuthority(let command):
+            let data = try RobotArmWireCodec.encodeAuthorityIntent(
+                arm: command.arm,
+                operation: command.operation,
                 messageID: envelope.id,
                 senderID: credential.controllerID,
                 sessionID: activeSessionID,
@@ -219,6 +221,58 @@ public actor CerebroRobotTransport: RobotTransport, RobotVideoDataTransport {
                 leaseMilliseconds: envelope.leaseMilliseconds
             )
             try await controlClient.sendApplicationData(data)
+
+        case .armTarget(let command):
+            let data = try RobotArmWireCodec.encodeTargetIntent(
+                command.target,
+                messageID: envelope.id,
+                senderID: credential.controllerID,
+                sessionID: activeSessionID,
+                sequence: envelope.sequence,
+                issuedAtUnixMilliseconds: envelope.issuedAtUnixMilliseconds,
+                leaseMilliseconds: envelope.leaseMilliseconds,
+                authorityID: command.authorityID,
+                deadManIsHeld: command.deadManIsHeld
+            )
+            try await controlClient.sendApplicationData(data)
+
+        case .armHold(let command):
+            let data = try RobotArmWireCodec.encodeHoldIntent(
+                arm: command.arm,
+                authorityID: command.authorityID,
+                reason: command.reason,
+                messageID: envelope.id,
+                senderID: credential.controllerID,
+                sessionID: activeSessionID,
+                sequence: envelope.sequence,
+                issuedAtUnixMilliseconds: envelope.issuedAtUnixMilliseconds,
+                leaseMilliseconds: envelope.leaseMilliseconds
+            )
+            try await controlClient.sendApplicationData(data)
+
+        case .gripper(let command):
+            let data = try RobotGripperWireCodec.encodeCommandIntent(
+                command.intent,
+                messageID: envelope.id,
+                senderID: credential.controllerID,
+                sessionID: activeSessionID,
+                sequence: envelope.sequence,
+                issuedAtUnixMilliseconds: envelope.issuedAtUnixMilliseconds,
+                leaseMilliseconds: envelope.leaseMilliseconds,
+                deadManHeld: command.deadManIsHeld
+            )
+            try await controlClient.sendApplicationData(data)
+
+        case .robotAction(let message):
+            let controllerID = credential.controllerID.uuidString.lowercased()
+            guard message.senderID.lowercased() == controllerID else {
+                throw RobotTransportError.invalidState(
+                    "Robot-action sender does not match the authenticated controller."
+                )
+            }
+            try await controlClient.sendApplicationData(
+                RobotActionWireCodec.archive(message)
+            )
 
         case .video(let message):
             guard let videoClient else {
@@ -317,22 +371,66 @@ public actor CerebroRobotTransport: RobotTransport, RobotVideoDataTransport {
 
         case .applicationData(let data):
             do {
-                guard let message = try RobotArmWireCodec.decode(data) else { break }
-                switch message {
-                case .measuredState(let telemetry):
-                    publish(.armTelemetry(telemetry))
-                case .targetDisposition(let disposition):
-                    guard disposition.recipientID == credential.controllerID else { break }
-                    publish(.armTargetDisposition(disposition))
-                case .targetIntent:
-                    // Cerebro never originates controller target intents.
-                    break
+                if let message = try RobotArmWireCodec.decode(data) {
+                    switch message {
+                    case .measuredState(let telemetry):
+                        publish(.armTelemetry(telemetry))
+                    case .authorityState(let state):
+                        guard state.recipientID == credential.controllerID,
+                            state.sessionID == activeSessionID
+                        else { return }
+                        publish(.armAuthorityState(state))
+                    case .targetDisposition(let disposition):
+                        guard disposition.recipientID == credential.controllerID,
+                            disposition.sessionID == activeSessionID
+                        else { return }
+                        publish(.armTargetDisposition(disposition))
+                    case .targetIntent, .authorityIntent, .holdIntent:
+                        // Cerebro never originates controller intents.
+                        break
+                    }
+                    return
                 }
             } catch {
                 // Application data also carries legacy keyed archives and
                 // independent protocols. A malformed claimed arm message is
                 // isolated from the safety-critical control connection.
-                break
+                return
+            }
+
+            do {
+                if let message = try RobotGripperWireCodec.decode(data) {
+                    switch message {
+                    case .state(let state):
+                        publish(.gripperState(state))
+                    case .commandDisposition(let disposition):
+                        guard disposition.recipientID == credential.controllerID,
+                            disposition.sessionID == activeSessionID
+                        else { return }
+                        publish(.gripperCommandDisposition(disposition))
+                    case .commandIntent:
+                        // Cerebro never originates controller intents.
+                        break
+                    }
+                    return
+                }
+            } catch {
+                // Malformed gripper-control frames are isolated from the
+                // independent legacy and robot-action application protocols.
+                return
+            }
+
+            do {
+                guard let message = try RobotActionWireCodec.decodeArchive(data) else { return }
+                let controllerID = credential.controllerID.uuidString.lowercased()
+                guard message.recipientID == nil
+                        || message.recipientID?.lowercased() == controllerID
+                else { return }
+                publish(.robotAction(message))
+            } catch {
+                // A malformed claimed robot-action envelope is isolated from
+                // the control session and cannot reach another legacy parser.
+                return
             }
 
         case .stateChanged, .lidarTelemetry:

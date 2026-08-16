@@ -113,11 +113,10 @@ public struct DeadManController: Sendable {
                 tilt: latestInput.cameraTilt,
                 isActive: latestInput.cameraControlIsActive
             ),
-            GripperVector(
-                leftClosed: latestInput.leftGripperClosed,
-                rightClosed: latestInput.rightGripperClosed,
-                isActive: latestInput.deadManIsHeld
-            ),
+            // Amber grippers use their own authenticated, calibrated command
+            // protocol. Never put gripper edges in the historical drive
+            // archive, which has no force or calibration semantics.
+            .inactive,
             TorsoVector(
                 rotation: latestInput.torsoRotation,
                 isActive: latestInput.deadManIsHeld && latestInput.cameraControlIsActive

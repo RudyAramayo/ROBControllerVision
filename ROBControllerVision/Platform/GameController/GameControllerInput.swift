@@ -9,10 +9,16 @@ struct GameControllerSample: Equatable, Sendable {
     var isConnected: Bool
     var leftTread: Float
     var rightTread: Float
+    var leftPrimaryStickY: Float
+    var rightPrimaryStickY: Float
     var cameraPan: Float
     var cameraTilt: Float
     var controllerPoses: ControllerPosePair?
     var deadManIsHeld: Bool
+    var leftSpatialControllerIsConnected: Bool
+    var rightSpatialControllerIsConnected: Bool
+    var leftSpatialGripIsHeld: Bool
+    var rightSpatialGripIsHeld: Bool
     var leftGripperClosed: Bool
     var rightGripperClosed: Bool
 
@@ -20,10 +26,16 @@ struct GameControllerSample: Equatable, Sendable {
         isConnected: false,
         leftTread: 0,
         rightTread: 0,
+        leftPrimaryStickY: 0,
+        rightPrimaryStickY: 0,
         cameraPan: 0,
         cameraTilt: 0,
         controllerPoses: nil,
         deadManIsHeld: false,
+        leftSpatialControllerIsConnected: false,
+        rightSpatialControllerIsConnected: false,
+        leftSpatialGripIsHeld: false,
+        rightSpatialGripIsHeld: false,
         leftGripperClosed: false,
         rightGripperClosed: false
     )
@@ -55,6 +67,12 @@ final class GameControllerInput: NSObject {
     private(set) var deadManIsHeld = false
     private(set) var leftTread: Float = 0
     private(set) var rightTread: Float = 0
+    private(set) var leftPrimaryStickY: Float = 0
+    private(set) var rightPrimaryStickY: Float = 0
+    private(set) var leftSpatialControllerIsConnected = false
+    private(set) var rightSpatialControllerIsConnected = false
+    private(set) var leftSpatialGripIsHeld = false
+    private(set) var rightSpatialGripIsHeld = false
     private(set) var leftGripperClosed = false
     private(set) var rightGripperClosed = false
     private(set) var poseTrackingStatus = "Spatial pose tracking has not started"
@@ -185,11 +203,14 @@ final class GameControllerInput: NSObject {
     private func pollPhysicalInput() {
         for (id, controller) in controllers {
             let eventTimestamp = controller.physicalInputProfile.lastEventTimestamp
-            guard var state = controllerStates[id], eventTimestamp > state.lastEventTimestamp else {
-                continue
+            guard var state = controllerStates[id] else { continue }
+            if eventTimestamp > state.lastEventTimestamp {
+                state.lastEventTimestamp = eventTimestamp
+                controllerStates[id] = state
             }
-            state.lastEventTimestamp = eventTimestamp
-            controllerStates[id] = state
+            // Re-read held controls on every poll. A held grip or stick does not
+            // continuously generate value-change events, but the arm dead-man
+            // requires a fresh sample heartbeat and must not run from cached input.
             updateController(id, from: controller)
         }
     }
@@ -270,27 +291,31 @@ final class GameControllerInput: NSObject {
     }
 
     private func publishCombinedSample() {
-        var left: Float = 0
-        var right: Float = 0
+        var leftSpatialStick: Float = 0
+        var rightSpatialStick: Float = 0
+        var leftConventionalStick: Float = 0
+        var rightConventionalStick: Float = 0
         var cameraPan: Float = 0
         var cameraTilt: Float = 0
-        var leftGripperClosed = false
-        var rightGripperClosed = false
+        var leftSpatialGripperClosed = false
+        var rightSpatialGripperClosed = false
+        var leftConventionalGripperClosed = false
+        var rightConventionalGripperClosed = false
         for state in controllerStates.values {
             switch state.side {
             case .left:
-                left = state.stickY
-                leftGripperClosed = state.triggerPressed
+                leftSpatialStick = state.stickY
+                leftSpatialGripperClosed = state.triggerPressed
             case .right:
-                right = state.stickY
-                rightGripperClosed = state.triggerPressed
+                rightSpatialStick = state.stickY
+                rightSpatialGripperClosed = state.triggerPressed
             case .both:
-                left = state.stickY
-                right = state.secondStickY
+                leftConventionalStick = state.stickY
+                rightConventionalStick = state.secondStickY
                 // Conventional gamepads expose independent index triggers.
                 if let gamepad = controllers.first(where: { controllerStates[$0.key]?.side == .both })?.value.extendedGamepad {
-                    leftGripperClosed = gamepad.leftTrigger.value > 0.5
-                    rightGripperClosed = gamepad.rightTrigger.value > 0.5
+                    leftConventionalGripperClosed = gamepad.leftTrigger.value > 0.5
+                    rightConventionalGripperClosed = gamepad.rightTrigger.value > 0.5
                 }
             }
             cameraPan = state.cameraPan
@@ -299,16 +324,34 @@ final class GameControllerInput: NSObject {
         let conventionalDeadMan = controllerStates.values.first(where: { $0.side == .both })?.deadManIsHeld == true
         let hasLeftSpatialController = controllerStates.values.contains(where: { $0.side == .left })
         let hasRightSpatialController = controllerStates.values.contains(where: { $0.side == .right })
+        let leftSpatialGripIsHeld = controllerStates.values.first(where: { $0.side == .left })?
+            .deadManIsHeld == true
+        let rightSpatialGripIsHeld = controllerStates.values.first(where: { $0.side == .right })?
+            .deadManIsHeld == true
         let spatialDeadMan = hasLeftSpatialController && hasRightSpatialController
-            && controllerStates.values.filter({ $0.side != .both }).allSatisfy(\.deadManIsHeld)
+            && leftSpatialGripIsHeld && rightSpatialGripIsHeld
+        // Paired Vision control requires the spatial controllers, so their matching
+        // sticks and triggers must win deterministically when another controller is connected.
+        let left = hasLeftSpatialController ? leftSpatialStick : leftConventionalStick
+        let right = hasRightSpatialController ? rightSpatialStick : rightConventionalStick
+        let leftGripperClosed = hasLeftSpatialController
+            ? leftSpatialGripperClosed : leftConventionalGripperClosed
+        let rightGripperClosed = hasRightSpatialController
+            ? rightSpatialGripperClosed : rightConventionalGripperClosed
         apply(GameControllerSample(
             isConnected: !controllerStates.isEmpty,
             leftTread: left,
             rightTread: right,
+            leftPrimaryStickY: left,
+            rightPrimaryStickY: right,
             cameraPan: cameraPan,
             cameraTilt: cameraTilt,
             controllerPoses: posePair(),
             deadManIsHeld: conventionalDeadMan || spatialDeadMan,
+            leftSpatialControllerIsConnected: hasLeftSpatialController,
+            rightSpatialControllerIsConnected: hasRightSpatialController,
+            leftSpatialGripIsHeld: leftSpatialGripIsHeld,
+            rightSpatialGripIsHeld: rightSpatialGripIsHeld,
             leftGripperClosed: leftGripperClosed,
             rightGripperClosed: rightGripperClosed
         ))
@@ -406,6 +449,12 @@ final class GameControllerInput: NSObject {
         deadManIsHeld = sample.deadManIsHeld
         leftTread = sample.leftTread
         rightTread = sample.rightTread
+        leftPrimaryStickY = sample.leftPrimaryStickY
+        rightPrimaryStickY = sample.rightPrimaryStickY
+        leftSpatialControllerIsConnected = sample.leftSpatialControllerIsConnected
+        rightSpatialControllerIsConnected = sample.rightSpatialControllerIsConnected
+        leftSpatialGripIsHeld = sample.leftSpatialGripIsHeld
+        rightSpatialGripIsHeld = sample.rightSpatialGripIsHeld
         leftGripperClosed = sample.leftGripperClosed
         rightGripperClosed = sample.rightGripperClosed
         if !sample.isConnected {

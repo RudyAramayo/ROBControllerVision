@@ -126,26 +126,78 @@ authenticated _robvideo._udp / robvideo/1 connection
 
 The production subscription is H.264 `reliableStream`; QUIC datagrams are not advertised by Cerebro. Network.framework may segment the ordered QUIC stream internally, but the application receives one bounded, complete codec-configuration or AVCC access-unit message from the `RVID` framer. There is no JSON/base64 media path and no application-level datagram-fragment reassembly in this profile.
 
-## Amber arm feedback boundary
+## Supervised Amber arm-control boundary
 
 Amber gateway telemetry remains owned by Cerebro. Cerebro projects its validated
 seven-joint samples onto the existing authenticated ROBControl application channel;
 the Vision client decodes them into `RobotArmMeasuredState` and publishes them in the
-newest-value session snapshot. The app's telemetry panel is currently diagnostic;
-a future RealityKit arm renderer should consume the same measured snapshot and mark
-stale feedback rather than holding an old pose as live.
+newest-value session snapshot together with seven actuator modes and monotonic local
+receipt time. UI freshness is derived from both Cerebro's reported sample age and
+elapsed local uptime, so an old sample cannot become fresh after a clock adjustment.
 
-The reverse path transports `RobotArmTargetIntent` only. The message is bounded,
-leased, sequenced, and bound to both the paired controller identity and live session.
-Cerebro's bridge applies its independent, local, time-limited controller authority
-and returns a preview/rejection disposition. No transport or view calls the Amber
-gateway, and the v1 disposition schema makes execution eligibility permanently
-false. Cerebro also checks the exact calibrated per-joint B1 limits, current live
-session, telemetry age, seven position modes, 0.10-radian update delta,
-0.20-radian/second requested average speed, and one in-flight target per arm before
-marking a target as having passed internal preflight. Calibrated IK, continuous
-dead-man behavior, measured completion/hold-on-expiry, and the final hardware
-executor remain a later Cerebro-side layer.
+The reverse path uses `rob-arm-control/2` authority, target, and hold intents. Every
+intent is bounded, sequenced, leased, and bound to both the paired controller
+identity and exact live control session. An authority grant captures the measured
+baseline, mode vector, server-owned authority UUID, and expiry. Targets additionally
+carry that UUID and `dead_man_held=true`; holds can be sent without authority so a
+priority hold still reaches Cerebro while local state is uncertain. Responses are
+correlated by recipient, session, arm, and request/target message ID. Authority and
+the one-in-flight-target gate are independent per arm, so left and right grants and
+executions may coexist.
+
+`RobotSession` keeps drive and direct arm control mutually exclusive. It requires
+fresh feedback (250 ms or newer), all seven joints in position mode, exact B1 bounds,
+at most 0.08 radian per segment, at most 0.20 radian/second requested average speed,
+and one in-flight target per arm. Each arm owns a separate measured draft, selected
+joint, authority latch, and on-screen hold loop; the two screen loops can execute
+independently, and releasing one requests a hold only for that arm.
+
+With the arm panel open, the paired PSVR Sense path requires both controllers, both
+fresh per-arm grants, fresh per-arm telemetry, seven position-mode joints per arm,
+and a newly asserted two-grip dead-man. `RobotDualArmJointJogMapper` maps the left and
+right vertical primary sticks independently to the matching selected joints, copies
+the other joints from each latest measured vector, applies a 0.15 dead zone, and
+emits short `.visionProJointUI` targets within the same 0.08-radian and
+0.20-radian/second bounds. Both arms may therefore have one measured target in
+flight at the same time.
+
+Releasing either grip cancels both controller jog loops and sends ordinary holds to
+both arms without releasing their authorities. Controller disconnect or sample
+silence beyond 250 ms, per-arm telemetry/mode/preflight loss, target timeout or send
+failure, scene loss, stop, drive disarm, or software E-stop takes the stronger path:
+priority-hold both arms and clear both local arm latches. Cerebro and the Amber
+gateway remain responsible for independent per-arm identity, lease, watchdog,
+measured-completion, and hold-on-expiry checks. Vision never activates an arm,
+changes an actuator mode, or sends gateway commands directly. Controller transforms
+remain diagnostic only; this is measured joint jogging, not tracked-pose Cartesian
+control or IK puppeteering.
+
+The current `CerebroRobotTransport` selects this execution-capable profile for a
+successfully authenticated Cerebro connection; it is not a remotely negotiated
+capability bit. Actual authority still fails closed unless a current Cerebro peer
+understands `rob-arm-control/2`, publishes valid feedback, and grants the exact live
+controller/session request. The simulator selects a non-executing profile.
+
+## Supervised robot-action approval boundary
+
+The Vision approval console is disabled on every launch and connection. Once the
+operator enables it, `RobotSession` publishes a refreshed `controller_hello` that is
+bound to the paired controller identity and lists the exact bounded action set.
+Scene loss, disconnect, software E-stop, or explicit disable first withdraws that
+availability and cancels the pending request. Cerebro accepts a hello only from the
+matching authenticated operator session and expires it if refreshes stop.
+
+An incoming request must target the exact Vision controller, pass the strict v1
+schema, expire within 120 seconds, and contain the exact argument keys for its action.
+Only one request is displayed at a time. The operator explicitly approves or rejects
+the immutable proposal; duplicate requests replay status rather than creating a
+second execution. `play_gesture` carries a catalog name only—never raw joint data—and
+Cerebro owns its leased Amber execution and measured terminal result. Automatic
+gesture cancellation or failure holds only that run's reserved arms; an explicit
+stop or shutdown uses the separate global priority-hold lane.
+The remaining bounded actions expose manual completed/failed controls because their
+physical completion is not inferred by Vision. Cancelling, backgrounding, stopping,
+or losing the session cannot silently preserve approval.
 
 Video capabilities, subscription requests and responses, receiver feedback, unsubscribe, stream-ended events, and media all use `_robvideo._udp`. None of them is placed on the `_robctl._udp` connection. `RobotSession` models these as control-domain operations, while `CerebroRobotTransport` routes them to the independent physical video channel.
 

@@ -25,6 +25,7 @@
 		B0000000000000000000000E /* ROBCerebroTransport in Frameworks */ = {isa = PBXBuildFile; productRef = P00000000000000000000004 /* ROBCerebroTransport */; };
 		B0000000000000000000000F /* CerebroPairingSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0000000000000000000000E /* CerebroPairingSheet.swift */; };
 		B00000000000000000000010 /* HeadOrientationInput.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0000000000000000000000F /* HeadOrientationInput.swift */; };
+		B00000000000000000000013 /* ArmControlPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000012 /* ArmControlPanel.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -45,6 +46,7 @@
 		F0000000000000000000000D /* VideoPipelineCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoPipelineCoordinator.swift; sourceTree = "<group>"; };
 		F0000000000000000000000E /* CerebroPairingSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CerebroPairingSheet.swift; sourceTree = "<group>"; };
 		F0000000000000000000000F /* HeadOrientationInput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeadOrientationInput.swift; sourceTree = "<group>"; };
+		F00000000000000000000012 /* ArmControlPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArmControlPanel.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -121,6 +123,7 @@
 		A0000000000000000000000A /* Control */ = {
 			isa = PBXGroup;
 			children = (
+				F00000000000000000000012 /* ArmControlPanel.swift */,
 				F00000000000000000000006 /* ControlPanel.swift */,
 				F00000000000000000000011 /* OperatorSpeechPanel.swift */,
 			);
@@ -263,6 +266,7 @@
 				B00000000000000000000004 /* GameControllerInput.swift in Sources */,
 				B00000000000000000000005 /* ConnectionStatusView.swift in Sources */,
 				B00000000000000000000006 /* ControlPanel.swift in Sources */,
+				B00000000000000000000013 /* ArmControlPanel.swift in Sources */,
 				B00000000000000000000011 /* VisionSpeechInput.swift in Sources */,
 				B00000000000000000000012 /* OperatorSpeechPanel.swift in Sources */,
 				B00000000000000000000007 /* TelemetryPanel.swift in Sources */,

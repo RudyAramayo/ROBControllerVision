@@ -239,10 +239,25 @@ public actor SimulatedRobotEndpoint: RobotTransport, RobotVideoDataTransport {
             // The simulator acknowledges speech/text without synthesizing audio.
             break
 
-        case .armTargetIntent:
-            // The simulator has no Amber arm plant. Keep this command
-            // observation-only just like Cerebro's v1 preview gate.
-            break
+        case .robotAction:
+            throw RobotTransportError.invalidState(
+                "The simulator does not originate or execute Cerebro robot actions."
+            )
+
+        case .armAuthority(let command):
+            throw RobotTransportError.invalidState(
+                "The simulator has no physical Amber \(command.arm.rawValue) arm authority."
+            )
+
+        case .armTarget, .armHold:
+            throw RobotTransportError.invalidState(
+                "The simulator does not execute or hold physical Amber arms."
+            )
+
+        case .gripper:
+            throw RobotTransportError.invalidState(
+                "The simulator does not execute physical Amber gripper commands."
+            )
         }
 
         eventContinuation?.yield(.commandAcknowledged(envelope.id))

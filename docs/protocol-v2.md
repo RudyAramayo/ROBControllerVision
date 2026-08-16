@@ -134,20 +134,88 @@ Scene suspension, disconnect, unsubscribe, stream-ended notification, or fatal r
 
 The production adapter deliberately contains Cerebro's established controller payload rather than changing the core model to match it. New protocol work should extend typed domain messages and add a narrow adapter mapping. It must not leak keyed archives, native implementation details, or service-name compatibility behavior into `ROBControlCore`.
 
-## Amber arm observation and target preview
+## Supervised Amber arm control
 
 The authenticated control connection also carries the narrow
-`rob-arm-control/1` JSON subprotocol. Cerebro publishes bounded seven-joint
-measured position, velocity, current, and status telemetry for each arm.
+`rob-arm-control/2`, schema-version 2 JSON subprotocol. Cerebro publishes bounded
+seven-joint measured position, velocity, current, status, and actuator-mode
+telemetry for each arm.
 `CerebroRobotTransport` converts those messages into `RobotEvent.armTelemetry`,
-and `RobotSessionSnapshot.armTelemetry` retains only the latest sample per arm.
+and `RobotSessionSnapshot.armTelemetry` retains only increasing sequences plus
+their local monotonic receipt times.
 
-`RobotSession.submitArmTargetIntent` can send a seven-joint target containing the
-exact authenticated controller UUID, live control-session UUID, command sequence,
-and short lease. Cerebro validates those values and its local time-limited
-controller authority before returning a disposition. Protocol v1 remains
-preview-only: every disposition has `execution_eligible=false`, and neither the
-Vision app nor the transport invokes Amber hardware. The companion Cerebro
-repository applies the calibrated B1 bounds (J1 ±2.4435, J2 ±2.3213, J3–J6
-±2.2863, J7 ±3.05 radians) and documents the complete preflight and future
-spatial-control boundary in `docs/vision-pro-arm-control.md`.
+An `authority_intent` acquires 60–600 seconds of server-owned authority for one
+arm or releases it with the fixed 1-second release lease. Cerebro returns an
+`authority_state` (`granted`, `released`, `rejected`, or `expired`) correlated to
+the exact controller, live session, request, and arm. A grant includes its
+authority UUID, expiry, captured seven-joint measured baseline and sequence, and
+seven actuator modes. Left and right authority state is independent: the same
+authenticated session may hold both grants, and each arm retains its own lease,
+active target, disposition, and measured-completion gate. Commands share one
+session-global increasing sequence so concurrent arm loops cannot create replay
+ambiguity; measured telemetry has an independent increasing sequence for each arm.
+
+A `target_intent` contains seven B1-bounded positions, a 0.65–10 second duration,
+the granted authority UUID, and `dead_man_held=true`. It has a 50–1500 ms lease;
+the Vision operator paths use 1000 ms and additionally limit each measured-relative
+segment to 0.08 radian and 0.20 radian/second. The on-screen lane for each arm can
+run independently. With two PSVR Sense controllers, the left and right vertical
+thumbsticks can simultaneously produce one target for each matching arm after both
+per-arm freshness, position-mode, authority, and in-flight gates pass.
+`target_disposition` reports
+accepted/executing/measured-complete progress or a terminal cancellation,
+lease-expiry hold, hold confirmation failure, execution failure, or rejection.
+Only `accepted_for_execution`, `executing`, and `completed_measured` are execution
+eligible.
+
+A `hold_intent` is likewise identity/session/sequence bound, has a 50–1500 ms
+lease, and carries a bounded reason plus an optional authority UUID. Paired
+controller jogging requires both grip buttons. Releasing either grip sends ordinary
+holds for both arms while retaining the independent authorities; a deliberate fresh
+two-grip hold is required to resume. Controller disconnect or input silence beyond
+250 ms, stale measured feedback, position-mode/preflight loss, target timeout or
+send failure, scene loss, stop, disarm, or software E-stop priority-holds and locally
+disarms both arms. All message types reject unknown fields, malformed values,
+oversized payloads, stale leases where
+applicable, and mismatched protocol/schema values. The calibrated B1 limits are J1
+±2.4435, J2 ±2.3213, J3–J6 ±2.2863, and J7 ±3.05 radians.
+
+The Vision app never activates Amber hardware or changes actuator modes, and the
+simulator advertises no physical arm execution. Cerebro and the gateway own the
+final authority, measured completion, watchdog, hold-on-expiry, and physical
+execution boundaries. PSVR pose IK is not transported by this workflow.
+The paired controller mapper consumes normalized vertical stick values and current
+measured joint vectors only. Tracked controller transforms do not become Cartesian
+end-effector targets and are not used for IK puppeteering.
+
+`supportsArmControlExecution` is currently selected by the local Cerebro transport
+profile after authenticated connection; Cerebro does not negotiate that bit on the
+wire. A peer without the v2 subprotocol still cannot grant authority or satisfy the
+feedback and mode gates, so target transmission remains unavailable. The simulator
+sets the profile false.
+
+## Controller-supervised robot actions
+
+Robot action approval uses the existing authenticated ROBControl application-data
+channel. `CerebroRobotTransport` wraps the strict JSON message in the established
+`ROBRobotActionProtocol.v1` keyed-archive envelope and verifies that the outer sender
+matches the installed controller credential. Incoming requests and statuses are
+accepted only when their `recipient_id` is that exact controller.
+
+The message kinds are `controller_hello`, `action_request`, `action_status`, and
+`action_cancel`. Approval defaults off. While enabled, `RobotSession` refreshes a
+hello every second with the bounded capabilities `look_at`, `play_gesture`,
+`request_pick`, `navigate_relative`, and `stop_motion`; disabling, backgrounding,
+software E-stop, or disconnect sends withdrawal/cancellation where the connection is
+still usable. Requests may live for at most 120 seconds and only one is pending.
+
+Argument schemas are exact: look/pick take one bounded `target_id`; gesture takes one
+bounded catalog `gesture` name; relative navigation takes only `distance_m` in
+−1...1, `yaw_rad` in −π...π, and `speed_scale` in 0...0.35; stop takes no arguments.
+Unknown or model-supplied joint keys are rejected. Operator acceptance is not
+completion. For `play_gesture`, Cerebro sends `executing` and only later
+`completed` after gateway acknowledgement and fresh measured settling; rejection,
+timeout, cancellation, authority loss, or failure holds only the arms reserved by
+that gesture run. Explicit stop and shutdown paths use the global priority hold.
+Other approved actions remain manually supervised and require an explicit
+completed/failed status from the operator console.

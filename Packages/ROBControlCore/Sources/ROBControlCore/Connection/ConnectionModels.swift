@@ -59,15 +59,18 @@ public struct ConnectionFailure: Codable, Error, Hashable, LocalizedError, Senda
 public struct RobotCapabilities: Codable, Hashable, Sendable {
     public var supportsMotionControl: Bool
     public var supportsEmergencyStop: Bool
+    public var supportsArmControlExecution: Bool
     public var cameras: [CameraDescriptor]
 
     public init(
         supportsMotionControl: Bool = true,
         supportsEmergencyStop: Bool = true,
+        supportsArmControlExecution: Bool = false,
         cameras: [CameraDescriptor] = []
     ) {
         self.supportsMotionControl = supportsMotionControl
         self.supportsEmergencyStop = supportsEmergencyStop
+        self.supportsArmControlExecution = supportsArmControlExecution
         self.cameras = cameras
     }
 }
@@ -186,6 +189,8 @@ public struct RobotSessionSnapshot: Equatable, Sendable {
     public var safety: MotionSafetyState
     public var telemetry: RobotTelemetry?
     public var armTelemetry: RobotArmTelemetrySnapshot
+    public var gripperTelemetry: RobotGripperTelemetrySnapshot
+    public var robotActions: RobotActionApprovalSnapshot
     public var videoStreams: [VideoStreamDescriptor]
 
     public init(
@@ -193,12 +198,16 @@ public struct RobotSessionSnapshot: Equatable, Sendable {
         safety: MotionSafetyState = MotionSafetyState(),
         telemetry: RobotTelemetry? = nil,
         armTelemetry: RobotArmTelemetrySnapshot = RobotArmTelemetrySnapshot(),
+        gripperTelemetry: RobotGripperTelemetrySnapshot = RobotGripperTelemetrySnapshot(),
+        robotActions: RobotActionApprovalSnapshot = RobotActionApprovalSnapshot(),
         videoStreams: [VideoStreamDescriptor] = []
     ) {
         self.connection = connection
         self.safety = safety
         self.telemetry = telemetry
         self.armTelemetry = armTelemetry
+        self.gripperTelemetry = gripperTelemetry
+        self.robotActions = robotActions
         self.videoStreams = videoStreams
     }
 }

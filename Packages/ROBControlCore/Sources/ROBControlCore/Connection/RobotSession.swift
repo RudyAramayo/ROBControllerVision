@@ -11,15 +11,18 @@ public actor RobotSession {
         public var commandInterval: Duration
         public var inputTimeout: Duration
         public var commandLeaseMilliseconds: UInt32
+        public var gripperDispositionTimeout: Duration
 
         public init(
             commandInterval: Duration = .milliseconds(100),
             inputTimeout: Duration = .milliseconds(250),
-            commandLeaseMilliseconds: UInt32 = 250
+            commandLeaseMilliseconds: UInt32 = 250,
+            gripperDispositionTimeout: Duration = .seconds(2)
         ) {
             self.commandInterval = commandInterval
             self.inputTimeout = inputTimeout
             self.commandLeaseMilliseconds = commandLeaseMilliseconds
+            self.gripperDispositionTimeout = gripperDispositionTimeout
         }
     }
 
@@ -36,10 +39,13 @@ public actor RobotSession {
     private var pendingVideoSubscriptions:
         [VideoSubscriptionID: CheckedContinuation<VideoSubscriptionResponse, Error>] = [:]
     private var videoTimeoutTasks: [VideoSubscriptionID: Task<Void, Never>] = [:]
+    private var gripperTimeoutTasks: [RobotArmSide: Task<Void, Never>] = [:]
     private var abandonedVideoSubscriptions: Set<VideoSubscriptionID> = []
     private var videoDataChannelOwners: [UUID: VideoDataChannelOwnership] = [:]
     private var deadMan: DeadManController
     private var commandSequence: UInt64 = 0
+    private var sceneIsActive = true
+    private var robotActionHelloSentAtUptime: TimeInterval?
 
     public init(configuration: Configuration = Configuration()) {
         self.configuration = configuration
@@ -53,6 +59,9 @@ public actor RobotSession {
         commandTask?.cancel()
         disconnectTask?.cancel()
         for task in videoTimeoutTasks.values {
+            task.cancel()
+        }
+        for task in gripperTimeoutTasks.values {
             task.cancel()
         }
         for continuation in pendingVideoSubscriptions.values {
@@ -111,6 +120,11 @@ public actor RobotSession {
         deadMan.setArmed(false)
         deadMan.invalidateInput(reason: .disconnected)
         commandSequence = 0
+        cancelGripperTimeouts()
+        robotActionHelloSentAtUptime = nil
+        snapshot.robotActions.isEnabled = false
+        snapshot.robotActions.pendingRequest = nil
+        snapshot.robotActions.lastStatus = nil
         snapshot.connection = RobotConnectionState(
             phase: .connecting,
             endpoint: newTransport.descriptor
@@ -192,22 +206,22 @@ public actor RobotSession {
         guard snapshot.connection.phase != .disconnected else { return }
 
         let activeTransport = transport
+        deadMan.setArmed(false)
+        synchronizeSafetyState(inhibitReason: .disconnected)
+        publish()
+        if snapshot.connection.isReady {
+            // Brake base motion before auxiliary action cancellation and arm
+            // holds so teardown traffic cannot delay the primary stop.
+            _ = try? await send(.stop(.userRequested))
+        }
+        await disableRobotActionApprovals(reason: "Vision controller disconnected")
+        await requestPriorityArmHoldsIgnoringFailure(reason: "session_disconnect")
+
         let operationID = UUID()
         disconnectOperationID = operationID
         connectionAttemptID = nil
         snapshot.connection.phase = .disconnecting
-        deadMan.setArmed(false)
         synchronizeSafetyState(inhibitReason: .disconnected)
-        var stopEnvelope: RobotCommandEnvelope?
-        if let sessionID = snapshot.connection.handshake?.sessionID {
-            commandSequence &+= 1
-            stopEnvelope = RobotCommandEnvelope(
-                sessionID: sessionID,
-                sequence: commandSequence,
-                leaseMilliseconds: configuration.commandLeaseMilliseconds,
-                command: .stop(.userRequested)
-            )
-        }
 
         eventTask?.cancel()
         commandTask?.cancel()
@@ -219,14 +233,15 @@ public actor RobotSession {
         cancelPendingVideoSubscriptions(with: RobotTransportError.notConnected)
         snapshot.telemetry = nil
         snapshot.armTelemetry = RobotArmTelemetrySnapshot()
+        cancelGripperTimeouts()
+        snapshot.gripperTelemetry = RobotGripperTelemetrySnapshot()
+        snapshot.robotActions.isEnabled = false
+        snapshot.robotActions.pendingRequest = nil
         snapshot.videoStreams = []
         synchronizeSafetyState(inhibitReason: .disconnected)
         publish()
 
         let task = Task {
-            if let stopEnvelope {
-                try? await activeTransport?.send(stopEnvelope)
-            }
             for (channelID, ownership) in dataChannels {
                 await ownership.transport.closeVideoDataChannel(channelID)
             }
@@ -250,6 +265,7 @@ public actor RobotSession {
         guard snapshot.connection.isReady else { return }
 
         if !armed {
+            await requestPriorityArmHoldsIgnoringFailure(reason: "drive_control_disarmed")
             deadMan.setArmed(false)
             deadMan.invalidateInput(reason: .operatorDisarmed)
             synchronizeSafetyState(inhibitReason: .operatorDisarmed)
@@ -287,6 +303,7 @@ public actor RobotSession {
     }
 
     public func setSceneActive(_ active: Bool) async {
+        sceneIsActive = active
         deadMan.setSceneActive(active)
         if !active {
             synchronizeSafetyState(inhibitReason: .sceneInactive)
@@ -298,6 +315,8 @@ public actor RobotSession {
                     handleSendFailure(error)
                 }
             }
+            await disableRobotActionApprovals(reason: "Vision app became inactive")
+            await requestPriorityArmHoldsIgnoringFailure(reason: "vision_scene_inactive")
         }
     }
 
@@ -306,12 +325,17 @@ public actor RobotSession {
         synchronizeSafetyState(inhibitReason: .emergencyStop)
         publish()
 
-        guard snapshot.connection.isReady else { return }
-        do {
-            try await send(.emergencyStop)
-        } catch {
-            handleSendFailure(error)
+        if snapshot.connection.isReady {
+            do {
+                // The primary stop must lead every auxiliary cancellation or
+                // hold request so those network round trips cannot delay it.
+                try await send(.emergencyStop)
+            } catch {
+                handleSendFailure(error)
+            }
         }
+        await disableRobotActionApprovals(reason: "Vision software emergency stop")
+        await requestPriorityArmHoldsIgnoringFailure(reason: "software_emergency_stop")
     }
 
     public func resetEmergencyStop() async {
@@ -335,12 +359,359 @@ public actor RobotSession {
         try await send(.operatorText(OperatorTextMessage(text: trimmed, mode: mode)))
     }
 
-    /// Sends a leased target intent to Cerebro's preview-only arm gate. This
-    /// does not assert that the target was executed; callers must inspect the
-    /// correlated `lastTargetDisposition` response.
-    public func submitArmTargetIntent(_ target: RobotArmTargetIntent) async throws {
+    /// Installs the authenticated controller identity used by Cerebro's
+    /// application-level action ledger. Changing it always returns approvals
+    /// to off, so a pairing replacement cannot inherit an older grant.
+    public func configureRobotActionController(senderID: String?) {
+        let normalized = senderID?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let bounded = normalized.flatMap { value in
+            value.isEmpty || value.count > 128 ? nil : value
+        }
+        guard snapshot.robotActions.controllerID != bounded else { return }
+        snapshot.robotActions = RobotActionApprovalSnapshot(controllerID: bounded)
+        robotActionHelloSentAtUptime = nil
+        publish()
+    }
+
+    /// Enables or disables Cerebro action proposals for this foreground
+    /// session. Availability is refreshed every second while enabled because
+    /// Cerebro deliberately expires stale approval consoles.
+    public func setRobotActionApprovalsEnabled(_ enabled: Bool) async throws {
+        if !enabled {
+            await disableRobotActionApprovals(reason: "Operator disabled action approvals")
+            return
+        }
         guard snapshot.connection.isReady else { throw RobotTransportError.notConnected }
-        try await send(.armTargetIntent(target))
+        guard sceneIsActive, !snapshot.safety.emergencyStopIsLatched else {
+            throw RobotTransportError.invalidState(
+                "Action approvals require an active Vision scene with the software stop released."
+            )
+        }
+        guard snapshot.robotActions.controllerID != nil else {
+            throw RobotTransportError.invalidState(
+                "No authenticated controller identity is configured for action approvals."
+            )
+        }
+        snapshot.robotActions.isEnabled = true
+        snapshot.robotActions.pendingRequest = nil
+        snapshot.robotActions.lastStatus = nil
+        publish()
+        do {
+            try await sendRobotActionHello(force: true)
+        } catch {
+            snapshot.robotActions.isEnabled = false
+            robotActionHelloSentAtUptime = nil
+            publish()
+            throw error
+        }
+    }
+
+    /// Records the operator's explicit disposition for the currently visible
+    /// immutable request. Accepting a named Amber gesture authorizes Cerebro to
+    /// execute it; Cerebro, not Vision, subsequently owns measured completion.
+    public func respondToPendingRobotAction(
+        _ requestedState: RobotActionState,
+        detail: String
+    ) async throws {
+        guard snapshot.connection.isReady else { throw RobotTransportError.notConnected }
+        guard let request = snapshot.robotActions.pendingRequest,
+              let controllerID = snapshot.robotActions.controllerID else {
+            throw RobotTransportError.invalidState("There is no pending robot action.")
+        }
+        guard [.accepted, .rejected, .cancelled, .failed, .completed]
+            .contains(requestedState) else {
+            throw RobotTransportError.invalidState("That action state is not an operator response.")
+        }
+        if requestedState == .accepted, !snapshot.robotActions.isEnabled {
+            throw RobotTransportError.invalidState("Action approvals are disabled.")
+        }
+        if request.action == .playGesture,
+           requestedState == .completed || requestedState == .failed {
+            throw RobotTransportError.invalidState(
+                "Cerebro owns measured completion for an approved Amber gesture."
+            )
+        }
+
+        let state: RobotActionState = request.isExpired && requestedState == .accepted
+            ? .expired : requestedState
+        let boundedDetail = String(detail.prefix(2_048))
+        let status = try RobotActionMessage.status(
+            for: request,
+            state: state,
+            detail: state == .expired
+                ? "Approval deadline elapsed before the operator accepted it."
+                : boundedDetail,
+            senderID: controllerID
+        )
+        try await send(.robotAction(status))
+        snapshot.robotActions.lastStatus = status
+        if state.isTerminal {
+            snapshot.robotActions.pendingRequest = nil
+        }
+        publish()
+    }
+
+    /// Requests a server-owned, time-limited authority for one Amber arm.
+    /// Cerebro remains authoritative and may reject this request even when the
+    /// local Vision latch is clear.
+    @discardableResult
+    public func requestArmAuthority(
+        for arm: RobotArmSide,
+        durationMilliseconds: UInt32 = 300_000
+    ) async throws -> UUID {
+        guard snapshot.connection.isReady else { throw RobotTransportError.notConnected }
+        guard snapshot.connection.handshake?.capabilities.supportsArmControlExecution == true else {
+            throw RobotTransportError.invalidState(
+                "This endpoint does not advertise physical Amber arm execution."
+            )
+        }
+        guard !snapshot.safety.emergencyStopIsLatched, sceneIsActive else {
+            throw RobotTransportError.invalidState(
+                "Arm authority requires an active scene with the software stop released."
+            )
+        }
+        guard (60_000 ... 600_000).contains(durationMilliseconds) else {
+            throw RobotTransportError.invalidState("Arm authority duration is out of bounds.")
+        }
+        if deadMan.isArmed {
+            await setArmed(false)
+        }
+
+        let requestID = UUID()
+        snapshot.armTelemetry.updateControlState(for: arm) { control in
+            control.localControlIsArmed = false
+            control.pendingAuthorityRequestID = requestID
+            control.activeTargetMessageID = nil
+            control.activeTargetSentAtUptime = nil
+        }
+        publish()
+        do {
+            _ = try await send(
+                .armAuthority(RobotArmAuthorityCommand(arm: arm, operation: .acquire)),
+                leaseMilliseconds: durationMilliseconds,
+                id: requestID
+            )
+            return requestID
+        } catch {
+            snapshot.armTelemetry.updateControlState(for: arm) { control in
+                if control.pendingAuthorityRequestID == requestID {
+                    control.pendingAuthorityRequestID = nil
+                }
+            }
+            publish()
+            throw error
+        }
+    }
+
+    public func releaseArmAuthority(for arm: RobotArmSide) async throws {
+        guard snapshot.connection.isReady else { throw RobotTransportError.notConnected }
+        _ = try? await requestArmHold(for: arm, reason: "operator_released_authority")
+        let requestID = UUID()
+        snapshot.armTelemetry.updateControlState(for: arm) { control in
+            control.localControlIsArmed = false
+            control.pendingAuthorityRequestID = requestID
+            control.activeTargetMessageID = nil
+            control.activeTargetSentAtUptime = nil
+        }
+        publish()
+        do {
+            _ = try await send(
+                .armAuthority(RobotArmAuthorityCommand(arm: arm, operation: .release)),
+                leaseMilliseconds: 1_000,
+                id: requestID
+            )
+        } catch {
+            snapshot.armTelemetry.updateControlState(for: arm) { control in
+                if control.pendingAuthorityRequestID == requestID {
+                    control.pendingAuthorityRequestID = nil
+                }
+            }
+            publish()
+            throw error
+        }
+    }
+
+    /// Sends one bounded 0.65-second segment while the operator's hold is
+    /// currently asserted. Completion remains driven by measured feedback.
+    @discardableResult
+    public func submitArmTargetSegment(
+        _ target: RobotArmTargetIntent
+    ) async throws -> UUID {
+        guard snapshot.connection.isReady else { throw RobotTransportError.notConnected }
+        guard sceneIsActive, !snapshot.safety.emergencyStopIsLatched else {
+            throw RobotTransportError.invalidState("Arm motion is inhibited by app safety state.")
+        }
+        let arm = target.arm
+        let control = snapshot.armTelemetry.controlState(for: arm)
+        guard control.localControlIsArmed,
+            control.activeTargetMessageID == nil,
+            let authority = control.authorityState,
+            authority.state == .granted,
+            authority.sessionID == snapshot.connection.handshake?.sessionID,
+            authority.expiresAt.timeIntervalSinceNow > 0,
+            let authorityID = authority.authorityID
+        else {
+            throw RobotTransportError.invalidState("Arm control authority is not active.")
+        }
+        guard let measured = snapshot.armTelemetry.measuredState(for: arm),
+            let age = snapshot.armTelemetry.effectiveSampleAgeMilliseconds(for: arm),
+            age <= 250,
+            measured.modes.count == RobotArmTargetIntent.jointCount,
+            measured.modes.allSatisfy({ $0 == 2 })
+        else {
+            throw RobotTransportError.invalidState(
+                "Fresh measured telemetry with all joints in position mode is required."
+            )
+        }
+        let deltas = zip(measured.positionsRadians, target.positionsRadians).map {
+            abs($0 - $1)
+        }
+        guard deltas.allSatisfy({ $0 <= 0.080_001 }),
+            deltas.allSatisfy({ $0 / target.durationSeconds <= 0.20 })
+        else {
+            throw RobotTransportError.invalidState(
+                "The requested segment exceeds the 0.08-radian or 0.20-radian/second limit."
+            )
+        }
+
+        let messageID = UUID()
+        snapshot.armTelemetry.updateControlState(for: arm) { state in
+            state.activeTargetMessageID = messageID
+            state.activeTargetSentAtUptime = ProcessInfo.processInfo.systemUptime
+        }
+        publish()
+        do {
+            _ = try await send(
+                .armTarget(
+                    RobotArmTargetCommand(
+                        target: target,
+                        authorityID: authorityID,
+                        deadManIsHeld: true
+                    )
+                ),
+                leaseMilliseconds: 1_000,
+                id: messageID
+            )
+            return messageID
+        } catch {
+            snapshot.armTelemetry.updateControlState(for: arm) { state in
+                if state.activeTargetMessageID == messageID {
+                    state.activeTargetMessageID = nil
+                    state.activeTargetSentAtUptime = nil
+                }
+            }
+            publish()
+            throw error
+        }
+    }
+
+    @discardableResult
+    public func requestArmHold(
+        for arm: RobotArmSide,
+        reason: String
+    ) async throws -> UUID {
+        guard snapshot.connection.isReady else { throw RobotTransportError.notConnected }
+        let authorityID = snapshot.armTelemetry.controlState(for: arm).authorityState?.authorityID
+        guard let command = RobotArmHoldCommand(
+            arm: arm,
+            authorityID: authorityID,
+            reason: reason
+        ) else {
+            throw RobotTransportError.invalidState("Arm hold reason is invalid.")
+        }
+        let messageID = UUID()
+        snapshot.armTelemetry.updateControlState(for: arm) { state in
+            state.activeTargetMessageID = nil
+            state.activeTargetSentAtUptime = nil
+            state.pendingHoldMessageID = messageID
+        }
+        publish()
+        do {
+            _ = try await send(
+                .armHold(command),
+                leaseMilliseconds: 1_000,
+                id: messageID
+            )
+            return messageID
+        } catch {
+            snapshot.armTelemetry.updateControlState(for: arm) { state in
+                if state.pendingHoldMessageID == messageID {
+                    state.pendingHoldMessageID = nil
+                }
+            }
+            publish()
+            throw error
+        }
+    }
+
+    public func requestPriorityArmHolds(reason: String) async {
+        await requestPriorityArmHoldsIgnoringFailure(reason: reason)
+    }
+
+    /// Sends one authenticated, leased gripper edge. Calibration is performed
+    /// locally in Cerebro; Vision can operate a gripper only after Cerebro has
+    /// reported that Amber accepted calibration during the current gateway
+    /// session. Amber v1 reports dispatch, not measured opening or force.
+    @discardableResult
+    public func submitGripperCommand(
+        _ intent: RobotGripperCommandIntent,
+        deadManIsHeld: Bool
+    ) async throws -> UUID {
+        guard snapshot.connection.isReady else { throw RobotTransportError.notConnected }
+        guard sceneIsActive, !snapshot.safety.emergencyStopIsLatched else {
+            throw RobotTransportError.invalidState(
+                "Gripper control is inhibited by the app safety state."
+            )
+        }
+        guard deadManIsHeld else {
+            throw RobotTransportError.invalidState(
+                "Hold both controller grip buttons before operating a gripper."
+            )
+        }
+        guard snapshot.gripperTelemetry.state(for: intent.arm)?.calibrationState
+                == .commandAcceptedUnverified else {
+            throw RobotTransportError.invalidState(
+                "Calibrate this gripper in Cerebro after the current power-up first."
+            )
+        }
+        guard snapshot.gripperTelemetry.control(for: intent.arm)
+                .pendingCommandMessageID == nil else {
+            throw RobotTransportError.invalidState(
+                "A gripper command is already awaiting its Amber acknowledgement."
+            )
+        }
+
+        let messageID = UUID()
+        snapshot.gripperTelemetry.updateControl(for: intent.arm) { state in
+            state.pendingCommandMessageID = messageID
+            state.lastTimedOutCommandMessageID = nil
+        }
+        scheduleGripperTimeout(for: intent.arm, messageID: messageID)
+        publish()
+        do {
+            _ = try await send(
+                .gripper(
+                    RobotGripperCommand(
+                        intent: intent,
+                        deadManIsHeld: deadManIsHeld
+                    )
+                ),
+                leaseMilliseconds: 750,
+                id: messageID
+            )
+            return messageID
+        } catch {
+            gripperTimeoutTasks.removeValue(forKey: intent.arm)?.cancel()
+            snapshot.gripperTelemetry.updateControl(for: intent.arm) { state in
+                if state.pendingCommandMessageID == messageID {
+                    state.pendingCommandMessageID = nil
+                }
+            }
+            publish()
+            throw error
+        }
     }
 
     public func subscribeVideo(
@@ -429,6 +800,182 @@ public actor RobotSession {
         await ownership.transport.closeVideoDataChannel(id)
     }
 
+    private func requestPriorityArmHoldsIgnoringFailure(reason: String) async {
+        for arm in RobotArmSide.allCases {
+            snapshot.armTelemetry.updateControlState(for: arm) { state in
+                state.localControlIsArmed = false
+                state.pendingAuthorityRequestID = nil
+                state.activeTargetMessageID = nil
+                state.activeTargetSentAtUptime = nil
+            }
+        }
+        publish()
+        guard snapshot.connection.isReady else { return }
+        for arm in RobotArmSide.allCases {
+            _ = try? await requestArmHold(for: arm, reason: reason)
+        }
+    }
+
+    private func disableRobotActionApprovals(reason: String) async {
+        let wasEnabled = snapshot.robotActions.isEnabled
+        snapshot.robotActions.isEnabled = false
+
+        if snapshot.connection.isReady,
+           let request = snapshot.robotActions.pendingRequest,
+           let controllerID = snapshot.robotActions.controllerID,
+           let cancelled = try? RobotActionMessage.status(
+                for: request,
+                state: .cancelled,
+                detail: String(reason.prefix(2_048)),
+                senderID: controllerID
+           ) {
+            _ = try? await send(.robotAction(cancelled))
+            snapshot.robotActions.lastStatus = cancelled
+        }
+        snapshot.robotActions.pendingRequest = nil
+
+        if snapshot.connection.isReady,
+           snapshot.robotActions.controllerID != nil,
+           wasEnabled {
+            try? await sendRobotActionHello(force: true)
+        }
+        robotActionHelloSentAtUptime = nil
+        publish()
+    }
+
+    private func sendRobotActionHello(force: Bool) async throws {
+        guard let controllerID = snapshot.robotActions.controllerID else {
+            throw RobotTransportError.invalidState(
+                "No authenticated controller identity is configured for action approvals."
+            )
+        }
+        let uptime = ProcessInfo.processInfo.systemUptime
+        if !force {
+            guard snapshot.robotActions.isEnabled else { return }
+            if let last = robotActionHelloSentAtUptime, uptime - last < 1.0 { return }
+        }
+        let hello = try RobotActionMessage.controllerHello(
+            senderID: controllerID,
+            acceptsActions: snapshot.robotActions.isEnabled
+        )
+        try await send(.robotAction(hello))
+        robotActionHelloSentAtUptime = uptime
+    }
+
+    private func handleRobotAction(_ message: RobotActionMessage) async {
+        guard let controllerID = snapshot.robotActions.controllerID else { return }
+
+        switch message.kind {
+        case .controllerHello:
+            // Cerebro is the proposal source, not another approval console.
+            return
+
+        case .actionRequest:
+            if message.isExpired {
+                await sendRobotActionStatus(
+                    for: message,
+                    state: .expired,
+                    detail: "The action request arrived after its approval deadline.",
+                    controllerID: controllerID
+                )
+                return
+            }
+            guard snapshot.robotActions.isEnabled else {
+                await sendRobotActionStatus(
+                    for: message,
+                    state: .rejected,
+                    detail: "Vision operator action approvals are disabled.",
+                    controllerID: controllerID
+                )
+                return
+            }
+            if let current = snapshot.robotActions.pendingRequest {
+                if current.callID == message.callID {
+                    if let last = snapshot.robotActions.lastStatus,
+                       last.callID == message.callID {
+                        _ = try? await send(.robotAction(last))
+                    } else {
+                        await sendRobotActionStatus(
+                            for: current,
+                            state: .pending,
+                            detail: "Waiting for the supervising Vision operator.",
+                            controllerID: controllerID,
+                            retainRequest: true
+                        )
+                    }
+                } else {
+                    await sendRobotActionStatus(
+                        for: message,
+                        state: .rejected,
+                        detail: "Another physical action is already awaiting disposition.",
+                        controllerID: controllerID
+                    )
+                }
+                return
+            }
+
+            snapshot.robotActions.pendingRequest = message
+            snapshot.robotActions.lastStatus = nil
+            await sendRobotActionStatus(
+                for: message,
+                state: .pending,
+                detail: "Waiting for the supervising Vision operator.",
+                controllerID: controllerID,
+                retainRequest: true
+            )
+
+        case .actionStatus:
+            guard let current = snapshot.robotActions.pendingRequest,
+                  current.callID == message.callID,
+                  current.senderID == message.senderID else { return }
+            snapshot.robotActions.lastStatus = message
+            if message.state.isTerminal {
+                snapshot.robotActions.pendingRequest = nil
+            }
+            publish()
+
+        case .actionCancel:
+            guard let current = snapshot.robotActions.pendingRequest,
+                  current.callID == message.callID,
+                  current.senderID == message.senderID else { return }
+            await sendRobotActionStatus(
+                for: current,
+                state: .cancelled,
+                detail: message.detail ?? "Cerebro cancelled the action request.",
+                controllerID: controllerID
+            )
+        }
+    }
+
+    private func sendRobotActionStatus(
+        for request: RobotActionMessage,
+        state: RobotActionState,
+        detail: String,
+        controllerID: String,
+        retainRequest: Bool = false
+    ) async {
+        guard let status = try? RobotActionMessage.status(
+            for: request,
+            state: state,
+            detail: String(detail.prefix(2_048)),
+            senderID: controllerID
+        ) else { return }
+        do {
+            try await send(.robotAction(status))
+        } catch {
+            handleSendFailure(error)
+            return
+        }
+        let isCurrentRequest = snapshot.robotActions.pendingRequest?.callID == request.callID
+        if retainRequest || isCurrentRequest || snapshot.robotActions.pendingRequest == nil {
+            snapshot.robotActions.lastStatus = status
+        }
+        if state.isTerminal && !retainRequest && isCurrentRequest {
+            snapshot.robotActions.pendingRequest = nil
+        }
+        publish()
+    }
+
     private func startCommandLoop(attemptID: UUID) {
         commandTask?.cancel()
         let interval = configuration.commandInterval
@@ -447,6 +994,15 @@ public actor RobotSession {
 
     private func sendControlTick(attemptID: UUID) async {
         guard connectionAttemptID == attemptID, snapshot.connection.isReady else { return }
+
+        if snapshot.robotActions.isEnabled {
+            do {
+                try await sendRobotActionHello(force: false)
+            } catch {
+                handleSendFailure(error)
+                return
+            }
+        }
 
         let decision = deadMan.evaluate(connectionIsReady: true)
         switch decision {
@@ -473,19 +1029,26 @@ public actor RobotSession {
         publish()
     }
 
-    private func send(_ command: RobotCommand) async throws {
+    @discardableResult
+    private func send(
+        _ command: RobotCommand,
+        leaseMilliseconds: UInt32? = nil,
+        id: UUID = UUID()
+    ) async throws -> UUID {
         guard let transport, let sessionID = snapshot.connection.handshake?.sessionID else {
             throw RobotTransportError.notConnected
         }
         commandSequence &+= 1
         let envelope = RobotCommandEnvelope(
+            id: id,
             sessionID: sessionID,
             sequence: commandSequence,
-            leaseMilliseconds: configuration.commandLeaseMilliseconds,
+            leaseMilliseconds: leaseMilliseconds ?? configuration.commandLeaseMilliseconds,
             command: command
         )
         try await transport.send(envelope)
         snapshot.safety.lastCommandSequence = commandSequence
+        return id
     }
 
     private func handle(_ event: RobotEvent, attemptID: UUID) async {
@@ -512,9 +1075,82 @@ public actor RobotSession {
             snapshot.armTelemetry.apply(telemetry)
             publish()
 
-        case .armTargetDisposition(let disposition):
-            snapshot.armTelemetry.lastTargetDisposition = disposition
+        case .armAuthorityState(let authority):
+            guard authority.sessionID == snapshot.connection.handshake?.sessionID else { return }
+            let current = snapshot.armTelemetry.controlState(for: authority.arm)
+            if authority.state == .granted {
+                guard current.pendingAuthorityRequestID == authority.requestMessageID else { return }
+            } else if let pending = current.pendingAuthorityRequestID,
+                pending != authority.requestMessageID,
+                current.authorityState?.authorityID != authority.authorityID
+            {
+                return
+            }
+            snapshot.armTelemetry.updateControlState(for: authority.arm) { state in
+                state.authorityState = authority
+                if state.pendingAuthorityRequestID == authority.requestMessageID {
+                    state.pendingAuthorityRequestID = nil
+                }
+                state.localControlIsArmed = authority.state == .granted
+                if authority.state != .granted {
+                    state.activeTargetMessageID = nil
+                    state.activeTargetSentAtUptime = nil
+                }
+            }
             publish()
+
+        case .armTargetDisposition(let disposition):
+            guard disposition.sessionID == snapshot.connection.handshake?.sessionID else { return }
+            let control = snapshot.armTelemetry.controlState(for: disposition.arm)
+            guard control.activeTargetMessageID == disposition.targetMessageID
+                || control.pendingHoldMessageID == disposition.targetMessageID
+            else { return }
+            snapshot.armTelemetry.lastTargetDisposition = disposition
+            snapshot.armTelemetry.updateControlState(for: disposition.arm) { state in
+                state.lastDisposition = disposition
+                if disposition.terminal,
+                    state.activeTargetMessageID == disposition.targetMessageID
+                {
+                    state.activeTargetMessageID = nil
+                    state.activeTargetSentAtUptime = nil
+                }
+                if disposition.terminal,
+                    state.pendingHoldMessageID == disposition.targetMessageID
+                {
+                    state.pendingHoldMessageID = nil
+                }
+                switch disposition.disposition {
+                case .rejectedAuthorityDisabled, .rejectedExpired,
+                    .rejectedIdentityMismatch, .rejectedSessionInactive,
+                    .holdUnconfirmed, .failed:
+                    state.localControlIsArmed = false
+                default:
+                    break
+                }
+            }
+            publish()
+
+        case .gripperState(let state):
+            snapshot.gripperTelemetry.apply(state)
+            publish()
+
+        case .gripperCommandDisposition(let disposition):
+            guard disposition.sessionID == snapshot.connection.handshake?.sessionID else { return }
+            let control = snapshot.gripperTelemetry.control(for: disposition.arm)
+            guard control.pendingCommandMessageID == disposition.requestMessageID else { return }
+            snapshot.gripperTelemetry.updateControl(for: disposition.arm) { state in
+                state.lastDisposition = disposition
+                if disposition.terminal {
+                    state.pendingCommandMessageID = nil
+                }
+            }
+            if disposition.terminal {
+                gripperTimeoutTasks.removeValue(forKey: disposition.arm)?.cancel()
+            }
+            publish()
+
+        case .robotAction(let message):
+            await handleRobotAction(message)
 
         case .commandAcknowledged:
             break
@@ -559,7 +1195,7 @@ public actor RobotSession {
             let wasAbandoned = abandonedVideoSubscriptions.remove(id) != nil
             guard !wasAbandoned, let continuation else {
                 if case .accepted = response {
-                    try? await send(.video(.unsubscribe(VideoUnsubscribeRequest(id: id))))
+                    _ = try? await send(.video(.unsubscribe(VideoUnsubscribeRequest(id: id))))
                 }
                 return
             }
@@ -647,6 +1283,11 @@ public actor RobotSession {
         )
         snapshot.telemetry = nil
         snapshot.armTelemetry = RobotArmTelemetrySnapshot()
+        cancelGripperTimeouts()
+        snapshot.gripperTelemetry = RobotGripperTelemetrySnapshot()
+        snapshot.robotActions.isEnabled = false
+        snapshot.robotActions.pendingRequest = nil
+        robotActionHelloSentAtUptime = nil
         snapshot.videoStreams = []
         cancelPendingVideoSubscriptions(with: failure)
         synchronizeSafetyState(
@@ -660,6 +1301,35 @@ public actor RobotSession {
         guard let continuation = pendingVideoSubscriptions.removeValue(forKey: id) else { return }
         abandonedVideoSubscriptions.insert(id)
         continuation.resume(throwing: VideoSubscriptionError.timedOut)
+    }
+
+    private func scheduleGripperTimeout(for arm: RobotArmSide, messageID: UUID) {
+        gripperTimeoutTasks.removeValue(forKey: arm)?.cancel()
+        let timeout = configuration.gripperDispositionTimeout
+        gripperTimeoutTasks[arm] = Task { [weak self] in
+            let clock = ContinuousClock()
+            do { try await clock.sleep(for: timeout) } catch { return }
+            await self?.timeOutGripperCommand(for: arm, messageID: messageID)
+        }
+    }
+
+    private func timeOutGripperCommand(for arm: RobotArmSide, messageID: UUID) {
+        guard snapshot.gripperTelemetry.control(for: arm).pendingCommandMessageID == messageID
+        else { return }
+        gripperTimeoutTasks.removeValue(forKey: arm)
+        snapshot.gripperTelemetry.updateControl(for: arm) { state in
+            state.pendingCommandMessageID = nil
+            state.lastTimedOutCommandMessageID = messageID
+        }
+        publish()
+    }
+
+    private func cancelGripperTimeouts() {
+        let tasks = Array(gripperTimeoutTasks.values)
+        gripperTimeoutTasks.removeAll()
+        for task in tasks {
+            task.cancel()
+        }
     }
 
     private func beginVideoSubscription(_ request: VideoSubscriptionRequest) async {

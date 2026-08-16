@@ -108,7 +108,7 @@ struct ControlPanel: View {
 
             Button(action: model.toggleArmed) {
                 Label(
-                    model.snapshot.safety.isArmed ? "Disarm Motion" : "Arm Motion",
+                    model.snapshot.safety.isArmed ? "Disable Drive Control" : "Enable Drive Control",
                     systemImage: model.snapshot.safety.isArmed ? "lock.open.fill" : "lock.fill"
                 )
                 .frame(maxWidth: .infinity)
@@ -119,6 +119,17 @@ struct ControlPanel: View {
                 !model.snapshot.connection.isReady
                     || model.snapshot.safety.emergencyStopIsLatched
             )
+
+            Button {
+                model.showsArmControlSheet = true
+            } label: {
+                Label("Amber Arm Control…", systemImage: "move.3d")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .disabled(!model.snapshot.connection.isReady)
+
+            RobotActionApprovalView(model: model)
 
             Button(role: .destructive, action: model.emergencyStop) {
                 Label("EMERGENCY STOP", systemImage: "stop.circle.fill")
@@ -140,6 +151,143 @@ struct ControlPanel: View {
         }
         .padding(20)
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 20))
+        .sheet(isPresented: $model.showsArmControlSheet) {
+            ArmControlPanel(model: model)
+        }
+    }
+}
+
+private struct RobotActionApprovalView: View {
+    @Bindable var model: RobotViewModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Label("Cerebro Action Approval", systemImage: "person.badge.shield.checkmark")
+                    .font(.headline)
+                Spacer()
+                Circle()
+                    .fill(model.robotActionApprovalsAreEnabled ? .green : .secondary)
+                    .frame(width: 10, height: 10)
+            }
+
+            Text(model.robotActionStatusMessage)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Button(action: model.toggleRobotActionApprovals) {
+                Label(
+                    model.robotActionApprovalsAreEnabled
+                        ? "Stop Accepting Proposals" : "Allow Action Proposals",
+                    systemImage: model.robotActionApprovalsAreEnabled
+                        ? "shield.slash" : "shield.checkered"
+                )
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(model.robotActionApprovalsAreEnabled ? .orange : .indigo)
+            .disabled(
+                !model.robotActionApprovalsAreEnabled
+                    && !model.canEnableRobotActionApprovals
+            )
+
+            if let request = model.pendingRobotAction {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text(title(for: request.action))
+                            .font(.headline)
+                        Spacer()
+                        Text(request.isExpired ? "EXPIRED" : stateLabel)
+                            .font(.caption2.bold())
+                            .foregroundStyle(request.isExpired ? .red : .orange)
+                    }
+
+                    Text(summary(for: request))
+                        .font(.caption.monospaced())
+                        .textSelection(.enabled)
+
+                    if model.pendingRobotActionIsExecuting {
+                        Button(role: .destructive, action: model.cancelPendingRobotAction) {
+                            Label("Cancel and Hold", systemImage: "hand.raised.fill")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+
+                        if request.action != .playGesture {
+                            HStack {
+                                Button("Confirm Completed", action: model.confirmPendingRobotActionCompleted)
+                                    .buttonStyle(.borderedProminent)
+                                    .tint(.green)
+                                Button("Report Failed", action: model.reportPendingRobotActionFailed)
+                                    .buttonStyle(.bordered)
+                            }
+                        } else {
+                            Text("Cerebro reports completion only after Amber acknowledgement and fresh measured settling.")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    } else {
+                        HStack {
+                            Button(action: model.approvePendingRobotAction) {
+                                Label("Approve", systemImage: "checkmark.seal.fill")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(.green)
+                            .disabled(request.isExpired)
+
+                            Button(role: .destructive, action: model.rejectPendingRobotAction) {
+                                Label("Reject", systemImage: "xmark.seal.fill")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                    }
+                }
+                .padding(12)
+                .background(.orange.opacity(0.10), in: RoundedRectangle(cornerRadius: 12))
+            }
+
+            Text("Every proposal is immutable and expires. Named gestures never carry model-supplied joint values, and the physical E-stop remains authoritative.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .padding(12)
+        .background(.indigo.opacity(0.08), in: RoundedRectangle(cornerRadius: 14))
+    }
+
+    private var stateLabel: String {
+        model.pendingRobotActionIsExecuting ? "APPROVED" : "REVIEW"
+    }
+
+    private func title(for action: RobotActionName?) -> String {
+        switch action {
+        case .lookAt: "Look At"
+        case .playGesture: "Play Approved Gesture"
+        case .requestPick: "Request Pick"
+        case .navigateRelative: "Navigate Relative"
+        case .stopMotion: "Stop Motion"
+        case nil: "Robot Action"
+        }
+    }
+
+    private func summary(for request: RobotActionMessage) -> String {
+        let fields = request.arguments.keys.sorted().map { key in
+            "\(key): \(describe(request.arguments[key]))"
+        }
+        return fields.isEmpty ? "No arguments" : fields.joined(separator: "\n")
+    }
+
+    private func describe(_ value: RobotActionJSONValue?) -> String {
+        switch value {
+        case .string(let text): text
+        case .number(let number): number.formatted(.number.precision(.fractionLength(3)))
+        case .bool(let value): value ? "true" : "false"
+        case .array(let values): "[\(values.map { describe($0) }.joined(separator: ", "))]"
+        case .object(let object): "{\(object.keys.sorted().joined(separator: ", "))}"
+        case .null: "null"
+        case nil: "—"
+        }
     }
 }
 

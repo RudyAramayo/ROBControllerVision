@@ -98,6 +98,46 @@ public struct OperatorTextMessage: Codable, Hashable, Sendable {
     }
 }
 
+public struct RobotArmAuthorityCommand: Codable, Hashable, Sendable {
+    public let arm: RobotArmSide
+    public let operation: RobotArmAuthorityOperation
+
+    public init(arm: RobotArmSide, operation: RobotArmAuthorityOperation) {
+        self.arm = arm
+        self.operation = operation
+    }
+}
+
+public struct RobotArmTargetCommand: Codable, Hashable, Sendable {
+    public let target: RobotArmTargetIntent
+    public let authorityID: UUID
+    public let deadManIsHeld: Bool
+
+    public init(
+        target: RobotArmTargetIntent,
+        authorityID: UUID,
+        deadManIsHeld: Bool
+    ) {
+        self.target = target
+        self.authorityID = authorityID
+        self.deadManIsHeld = deadManIsHeld
+    }
+}
+
+public struct RobotArmHoldCommand: Codable, Hashable, Sendable {
+    public let arm: RobotArmSide
+    public let authorityID: UUID?
+    public let reason: String
+
+    public init?(arm: RobotArmSide, authorityID: UUID?, reason: String) {
+        let reason = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !reason.isEmpty, reason.count <= 128 else { return nil }
+        self.arm = arm
+        self.authorityID = authorityID
+        self.reason = reason
+    }
+}
+
 public struct OperatorControlSample: Equatable, Sendable {
     public let sequence: UInt64
     public let source: ControlInputSource
@@ -221,9 +261,11 @@ public enum RobotCommand: Hashable, Sendable {
     case stop(MotionInhibitReason, ControllerPosePair? = nil)
     case emergencyStop
     case resetEmergencyStop
-    /// An authenticated, leased arm target request. Cerebro protocol v1 stages
-    /// this for preview only and never translates it into a hardware command.
-    case armTargetIntent(RobotArmTargetIntent)
+    case armAuthority(RobotArmAuthorityCommand)
+    case armTarget(RobotArmTargetCommand)
+    case armHold(RobotArmHoldCommand)
+    case gripper(RobotGripperCommand)
+    case robotAction(RobotActionMessage)
     case video(VideoControlMessage)
     case operatorText(OperatorTextMessage)
 }
@@ -276,7 +318,11 @@ extension RobotCommand: Codable {
         case grippers
         case torso
         case operatorText
+        case armAuthority
         case armTarget
+        case armHold
+        case gripper
+        case robotAction
     }
 
     private enum Kind: String, Codable {
@@ -287,7 +333,11 @@ extension RobotCommand: Codable {
         case resetEmergencyStop
         case video
         case operatorText
-        case armTargetIntent
+        case armAuthority
+        case armTarget
+        case armHold
+        case gripper
+        case robotAction
     }
 
     public init(from decoder: any Decoder) throws {
@@ -312,9 +362,25 @@ extension RobotCommand: Codable {
             self = .emergencyStop
         case .resetEmergencyStop:
             self = .resetEmergencyStop
-        case .armTargetIntent:
-            self = .armTargetIntent(
-                try container.decode(RobotArmTargetIntent.self, forKey: .armTarget)
+        case .armAuthority:
+            self = .armAuthority(
+                try container.decode(RobotArmAuthorityCommand.self, forKey: .armAuthority)
+            )
+        case .armTarget:
+            self = .armTarget(
+                try container.decode(RobotArmTargetCommand.self, forKey: .armTarget)
+            )
+        case .armHold:
+            self = .armHold(
+                try container.decode(RobotArmHoldCommand.self, forKey: .armHold)
+            )
+        case .gripper:
+            self = .gripper(
+                try container.decode(RobotGripperCommand.self, forKey: .gripper)
+            )
+        case .robotAction:
+            self = .robotAction(
+                try container.decode(RobotActionMessage.self, forKey: .robotAction)
             )
         case .video:
             self = .video(try container.decode(VideoControlMessage.self, forKey: .video))
@@ -344,9 +410,21 @@ extension RobotCommand: Codable {
             try container.encode(Kind.emergencyStop, forKey: .type)
         case .resetEmergencyStop:
             try container.encode(Kind.resetEmergencyStop, forKey: .type)
-        case .armTargetIntent(let target):
-            try container.encode(Kind.armTargetIntent, forKey: .type)
-            try container.encode(target, forKey: .armTarget)
+        case .armAuthority(let command):
+            try container.encode(Kind.armAuthority, forKey: .type)
+            try container.encode(command, forKey: .armAuthority)
+        case .armTarget(let command):
+            try container.encode(Kind.armTarget, forKey: .type)
+            try container.encode(command, forKey: .armTarget)
+        case .armHold(let command):
+            try container.encode(Kind.armHold, forKey: .type)
+            try container.encode(command, forKey: .armHold)
+        case .gripper(let command):
+            try container.encode(Kind.gripper, forKey: .type)
+            try container.encode(command, forKey: .gripper)
+        case .robotAction(let message):
+            try container.encode(Kind.robotAction, forKey: .type)
+            try container.encode(message, forKey: .robotAction)
         case .video(let video):
             try container.encode(Kind.video, forKey: .type)
             try container.encode(video, forKey: .video)
@@ -368,7 +446,11 @@ public enum RobotEvent: Equatable, Sendable {
     case disconnected(reason: String)
     case telemetry(RobotTelemetry)
     case armTelemetry(RobotArmMeasuredState)
+    case armAuthorityState(RobotArmAuthorityState)
     case armTargetDisposition(RobotArmTargetDisposition)
+    case gripperState(RobotGripperState)
+    case gripperCommandDisposition(RobotGripperCommandDisposition)
+    case robotAction(RobotActionMessage)
     case commandAcknowledged(UUID)
     case safety(RobotSafetyEvent)
     case video(VideoEvent)

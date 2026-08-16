@@ -37,6 +37,36 @@ struct SimulatedRobotEndpointTests {
         await endpoint.disconnect()
     }
 
+    @Test("The simulator advertises no physical arm execution and rejects authority")
+    func simulatorRejectsPhysicalArmAuthority() async throws {
+        let endpoint = SimulatedRobotEndpoint(
+            configuration: .init(connectDelay: .zero)
+        )
+        let handshake = try await endpoint.connect()
+        #expect(!handshake.capabilities.supportsArmControlExecution)
+
+        do {
+            try await endpoint.send(
+                RobotCommandEnvelope(
+                    sessionID: handshake.sessionID,
+                    sequence: 1,
+                    leaseMilliseconds: 60_000,
+                    command: .armAuthority(
+                        RobotArmAuthorityCommand(arm: .left, operation: .acquire)
+                    )
+                )
+            )
+            Issue.record("Expected the simulator to reject Amber arm authority")
+        } catch let error as RobotTransportError {
+            guard case .invalidState = error else {
+                Issue.record("Unexpected transport error: \(error)")
+                await endpoint.disconnect()
+                return
+            }
+        }
+        await endpoint.disconnect()
+    }
+
     @Test("Concurrent endpoint connects produce only one active session")
     func concurrentConnectsAreSerialized() async {
         let endpoint = SimulatedRobotEndpoint(
