@@ -57,6 +57,7 @@ public actor ROBVideoClient: RobotVideoDataTransport {
     public nonisolated let credential: ROBCerebroCredential
 
     private let endpoint: NWEndpoint
+    private let controlSessionID: UUID
     private let connectionQueue = DispatchQueue(
         label: "com.orbitusrobotics.robvideo.v1.vision.connection",
         qos: .userInitiated
@@ -74,9 +75,14 @@ public actor ROBVideoClient: RobotVideoDataTransport {
     private var lastAutomaticKeyFrameRequestUptime: TimeInterval = 0
     private var subscribers: [UUID: AsyncStream<ROBVideoClientEvent>.Continuation] = [:]
 
-    public init(endpoint: NWEndpoint, credential: ROBCerebroCredential) {
+    public init(
+        endpoint: NWEndpoint,
+        credential: ROBCerebroCredential,
+        controlSessionID: UUID
+    ) {
         self.endpoint = endpoint
         self.credential = credential
+        self.controlSessionID = controlSessionID
     }
 
     deinit {
@@ -107,8 +113,8 @@ public actor ROBVideoClient: RobotVideoDataTransport {
         return pair.stream
     }
 
-    /// Connects, verifies Cerebro's pinned TLS leaf, performs the pairing-secret proof, and waits
-    /// for the one-time capability advertisement.
+    /// Connects, verifies Cerebro's pinned TLS leaf, binds authentication to the live control
+    /// session, and waits for the one-time capability advertisement.
     public func connect() async throws -> [CameraDescriptor] {
         guard connection == nil,
             connectionAttemptID == nil,
@@ -396,7 +402,8 @@ public actor ROBVideoClient: RobotVideoDataTransport {
     private func sendAuthenticationHello(attemptID: UUID) async {
         do {
             let hello = ROBVideoAuthenticationHello(
-                controllerID: credential.controllerID
+                controllerID: credential.controllerID,
+                controlSessionID: controlSessionID
             )
             try await sendFrame(type: .authenticationHello, data: hello.encoded)
             guard connectionAttemptID == attemptID,
@@ -518,7 +525,8 @@ public actor ROBVideoClient: RobotVideoDataTransport {
                         accepted,
                         proof: proof,
                         challenge: challenge,
-                        credential: credential
+                        credential: credential,
+                        controlSessionID: controlSessionID
                     )
                 else {
                     throw ROBCerebroTransportError.authenticationFailed

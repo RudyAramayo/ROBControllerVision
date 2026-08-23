@@ -26,13 +26,15 @@ enum ROBVideoAuthenticationRejectionCode: UInt8, Sendable {
 }
 
 struct ROBVideoAuthenticationHello: Sendable {
-    static let encodedSize = 17
+    static let encodedSize = 33
 
     let controllerID: UUID
+    let controlSessionID: UUID
 
     var encoded: Data {
         var data = Data([ROBCerebroVideoProtocol.protocolVersion])
         data.append(controllerID.robVideoBytes)
+        data.append(controlSessionID.robVideoBytes)
         return data
     }
 }
@@ -85,15 +87,19 @@ struct ROBVideoAuthenticationProof: Sendable {
 }
 
 struct ROBVideoAuthenticationAccepted: Sendable {
-    static let encodedSize = 65
+    static let pairingProofEncodedSize = 65
+    static let sessionBoundEncodedSize = 49
 
     let channelID: Data
     let controllerID: UUID
-    let mac: Data
+    let mac: Data?
+    let controlSessionID: UUID?
 
     init(_ input: Data) throws {
         let data = Data(input)
-        guard data.count == Self.encodedSize,
+        let sizeIsSupported = data.count == Self.pairingProofEncodedSize
+            || data.count == Self.sessionBoundEncodedSize
+        guard sizeIsSupported,
             data[0] == ROBCerebroVideoProtocol.protocolVersion,
             let controllerID = UUID(robVideoBytes: Data(data[17..<33]))
         else {
@@ -101,7 +107,16 @@ struct ROBVideoAuthenticationAccepted: Sendable {
         }
         channelID = Data(data[1..<17])
         self.controllerID = controllerID
-        mac = Data(data[33..<65])
+        if data.count == Self.pairingProofEncodedSize {
+            mac = Data(data[33..<65])
+            controlSessionID = nil
+        } else {
+            guard let controlSessionID = UUID(robVideoBytes: Data(data[33..<49])) else {
+                throw ROBCerebroTransportError.authenticationFailed
+            }
+            mac = nil
+            self.controlSessionID = controlSessionID
+        }
     }
 }
 
@@ -143,15 +158,22 @@ enum ROBVideoAuthenticator {
         _ accepted: ROBVideoAuthenticationAccepted,
         proof: ROBVideoAuthenticationProof,
         challenge: ROBVideoAuthenticationChallenge,
-        credential: ROBCerebroCredential
+        credential: ROBCerebroCredential,
+        controlSessionID: UUID
     ) -> Bool {
         guard accepted.channelID == challenge.channelID,
             accepted.controllerID == credential.controllerID,
             proof.channelID == challenge.channelID,
             proof.controllerID == credential.controllerID,
-            proof.mac.count == SHA256.byteCount,
-            accepted.mac.count == SHA256.byteCount
+            proof.mac.count == SHA256.byteCount
         else {
+            return false
+        }
+        if let acceptedControlSessionID = accepted.controlSessionID {
+            return acceptedControlSessionID == controlSessionID
+        }
+        guard let acceptedMAC = accepted.mac,
+              acceptedMAC.count == SHA256.byteCount else {
             return false
         }
         var input = serverDomain
@@ -163,7 +185,7 @@ enum ROBVideoAuthenticator {
             ))
         input.append(proof.mac)
         return HMAC<SHA256>.isValidAuthenticationCode(
-            accepted.mac,
+            acceptedMAC,
             authenticating: input,
             using: SymmetricKey(data: credential.sharedSecret)
         )

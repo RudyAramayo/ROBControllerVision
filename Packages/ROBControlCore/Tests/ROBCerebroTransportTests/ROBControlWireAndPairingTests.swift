@@ -10,11 +10,60 @@ struct ROBControlWireAndPairingTests {
         let controllerID = try #require(
             UUID(uuidString: "10213243-5465-7687-98a9-bacbdcedfe0f")
         )
-        let hello = ROBVideoAuthenticationHello(controllerID: controllerID)
+        let controlSessionID = try #require(
+            UUID(uuidString: "ffeeddcc-bbaa-9988-7766-554433221100")
+        )
+        let hello = ROBVideoAuthenticationHello(
+            controllerID: controllerID,
+            controlSessionID: controlSessionID
+        )
         #expect(ROBVideoMessageType.authenticationHello.rawValue == 13)
         #expect(hello.encoded.count == ROBVideoAuthenticationHello.encodedSize)
         #expect(hello.encoded.first == ROBCerebroVideoProtocol.protocolVersion)
-        #expect(Data(hello.encoded.dropFirst()) == controllerID.robVideoBytes)
+        #expect(Data(hello.encoded[1..<17]) == controllerID.robVideoBytes)
+        #expect(Data(hello.encoded[17..<33]) == controlSessionID.robVideoBytes)
+    }
+
+    @Test("Video authentication acceptance binds the live control session")
+    func videoAuthenticationAcceptedSessionWireLayout() throws {
+        let controllerID = try #require(
+            UUID(uuidString: "10213243-5465-7687-98a9-bacbdcedfe0f")
+        )
+        let controlSessionID = try #require(
+            UUID(uuidString: "ffeeddcc-bbaa-9988-7766-554433221100")
+        )
+        let channelID = Data((0..<16).map(UInt8.init))
+        var encoded = Data([ROBCerebroVideoProtocol.protocolVersion])
+        encoded.append(channelID)
+        encoded.append(controllerID.robVideoBytes)
+        encoded.append(controlSessionID.robVideoBytes)
+
+        let accepted = try ROBVideoAuthenticationAccepted(encoded)
+        #expect(encoded.count == ROBVideoAuthenticationAccepted.sessionBoundEncodedSize)
+        #expect(accepted.channelID == channelID)
+        #expect(accepted.controllerID == controllerID)
+        #expect(accepted.controlSessionID == controlSessionID)
+        #expect(accepted.mac == nil)
+    }
+
+    @Test("Video authentication still decodes legacy pairing acceptance")
+    func videoAuthenticationAcceptedLegacyWireLayout() throws {
+        let controllerID = try #require(
+            UUID(uuidString: "10213243-5465-7687-98a9-bacbdcedfe0f")
+        )
+        let channelID = Data((0..<16).map(UInt8.init))
+        let mac = Data(repeating: 0xa5, count: 32)
+        var encoded = Data([ROBCerebroVideoProtocol.protocolVersion])
+        encoded.append(channelID)
+        encoded.append(controllerID.robVideoBytes)
+        encoded.append(mac)
+
+        let accepted = try ROBVideoAuthenticationAccepted(encoded)
+        #expect(encoded.count == ROBVideoAuthenticationAccepted.pairingProofEncodedSize)
+        #expect(accepted.channelID == channelID)
+        #expect(accepted.controllerID == controllerID)
+        #expect(accepted.controlSessionID == nil)
+        #expect(accepted.mac == mac)
     }
 
     @Test("Video authentication rejection codes preserve the actual failure")
@@ -39,6 +88,15 @@ struct ROBControlWireAndPairingTests {
             ROBVideoAuthenticationRejectionCode.transportError(from: Data())
                 == .invalidWireMessage
         )
+    }
+
+    @Test("Video reconnects use bounded exponential backoff")
+    func videoReconnectBackoff() {
+        #expect(CerebroRobotTransport.videoReconnectDelay(afterFailedAttempts: 0) == .seconds(2))
+        #expect(CerebroRobotTransport.videoReconnectDelay(afterFailedAttempts: 1) == .seconds(4))
+        #expect(CerebroRobotTransport.videoReconnectDelay(afterFailedAttempts: 2) == .seconds(8))
+        #expect(CerebroRobotTransport.videoReconnectDelay(afterFailedAttempts: 3) == .seconds(16))
+        #expect(CerebroRobotTransport.videoReconnectDelay(afterFailedAttempts: 99) == .seconds(30))
     }
 
     @Test("A sole video route tolerates omitted TXT metadata but rejects another robot")

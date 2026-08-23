@@ -28,6 +28,7 @@ public actor CerebroRobotTransport: RobotTransport, RobotVideoDataTransport {
     private var controlEventTask: Task<Void, Never>?
     private var videoEventTasks: [UUID: Task<Void, Never>] = [:]
     private var videoReconnectTask: Task<Void, Never>?
+    private var videoReconnectAttempt = 0
     private var activeVideoStreams: Set<VideoSubscriptionID> = []
     private var eventSubscribers: [UUID: AsyncStream<RobotEvent>.Continuation] = [:]
 
@@ -72,6 +73,7 @@ public actor CerebroRobotTransport: RobotTransport, RobotVideoDataTransport {
 
         let attemptID = UUID()
         connectionAttemptID = attemptID
+        videoReconnectAttempt = 0
         startControlEventMonitor()
 
         do {
@@ -80,12 +82,16 @@ public actor CerebroRobotTransport: RobotTransport, RobotVideoDataTransport {
 
             var cameras: [CameraDescriptor] = []
             do {
-                cameras = try await connectVideoService(discoveryTimeout: .seconds(3))
+                cameras = try await connectVideoService(
+                    discoveryTimeout: .seconds(3),
+                    controlSessionID: sessionID
+                )
                 try ensureCurrentConnectionAttempt(attemptID)
                 if cameras.isEmpty {
                     throw ROBCerebroTransportError.videoUnavailable
                 }
                 videoUnavailableReason = nil
+                videoReconnectAttempt = 0
             } catch {
                 if error is CancellationError || Task.isCancelled {
                     throw error
@@ -388,7 +394,8 @@ public actor CerebroRobotTransport: RobotTransport, RobotVideoDataTransport {
     }
 
     private func connectVideoService(
-        discoveryTimeout: Duration
+        discoveryTimeout: Duration,
+        controlSessionID: UUID
     ) async throws -> [CameraDescriptor] {
         guard videoClientsByID.isEmpty else {
             throw ROBCerebroTransportError.connectionFailed(
@@ -402,7 +409,8 @@ public actor CerebroRobotTransport: RobotTransport, RobotVideoDataTransport {
         videoEndpoint = discoveredVideo.endpoint
         let client = ROBVideoClient(
             endpoint: discoveredVideo.endpoint,
-            credential: credential
+            credential: credential,
+            controlSessionID: controlSessionID
         )
         let clientID = UUID()
         videoClient = client
@@ -429,12 +437,18 @@ public actor CerebroRobotTransport: RobotTransport, RobotVideoDataTransport {
             videoClientIDBySubscriptionID[subscriptionID] = available.key
             return (available.key, available.value)
         }
-        guard videoClientsByID.count < 3, let videoEndpoint else {
+        guard videoClientsByID.count < 3,
+              let videoEndpoint,
+              let activeSessionID else {
             throw ROBCerebroTransportError.videoUnavailable
         }
 
         let clientID = UUID()
-        let client = ROBVideoClient(endpoint: videoEndpoint, credential: credential)
+        let client = ROBVideoClient(
+            endpoint: videoEndpoint,
+            credential: credential,
+            controlSessionID: activeSessionID
+        )
         videoClientsByID[clientID] = client
         videoClientIDBySubscriptionID[subscriptionID] = clientID
         startVideoEventMonitor(clientID: clientID, client: client)
@@ -464,9 +478,11 @@ public actor CerebroRobotTransport: RobotTransport, RobotVideoDataTransport {
               videoClientsByID.isEmpty,
               videoReconnectTask == nil else { return }
         let expectedSessionID = activeSessionID
+        let delay = Self.videoReconnectDelay(afterFailedAttempts: videoReconnectAttempt)
+        videoReconnectAttempt = min(videoReconnectAttempt + 1, 4)
         videoReconnectTask = Task { [weak self] in
             do {
-                try await ContinuousClock().sleep(for: .seconds(2))
+                try await ContinuousClock().sleep(for: delay)
             } catch {
                 return
             }
@@ -481,7 +497,10 @@ public actor CerebroRobotTransport: RobotTransport, RobotVideoDataTransport {
               !isDisconnecting,
               videoClientsByID.isEmpty else { return }
         do {
-            let cameras = try await connectVideoService(discoveryTimeout: .seconds(5))
+            let cameras = try await connectVideoService(
+                discoveryTimeout: .seconds(5),
+                controlSessionID: expectedSessionID
+            )
             guard !cameras.isEmpty else {
                 throw ROBCerebroTransportError.videoUnavailable
             }
@@ -491,6 +510,7 @@ public actor CerebroRobotTransport: RobotTransport, RobotVideoDataTransport {
                 throw ROBCerebroTransportError.cancelled
             }
             videoUnavailableReason = nil
+            videoReconnectAttempt = 0
             publish(.capabilitiesChanged(Self.capabilities(cameras: cameras)))
         } catch {
             videoUnavailableReason = Self.videoDiagnostic(from: error)
@@ -510,6 +530,9 @@ public actor CerebroRobotTransport: RobotTransport, RobotVideoDataTransport {
         case .disconnected(let error):
             guard activeSessionID != nil, !isDisconnecting else { return }
             activeSessionID = nil
+            videoReconnectAttempt = 0
+            videoReconnectTask?.cancel()
+            videoReconnectTask = nil
             lastCommandSequence = 0
             let streams = activeVideoStreams
             activeVideoStreams.removeAll()
@@ -655,6 +678,7 @@ public actor CerebroRobotTransport: RobotTransport, RobotVideoDataTransport {
     }
 
     private func tearDownConnections() async {
+        videoReconnectAttempt = 0
         await tearDownVideoConnection()
         controlEventTask?.cancel()
         controlEventTask = nil
@@ -703,6 +727,11 @@ public actor CerebroRobotTransport: RobotTransport, RobotVideoDataTransport {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let bounded = singleLine.isEmpty ? "The video connection ended unexpectedly." : singleLine
         return String(bounded.prefix(320)) + (bounded.count > 320 ? "…" : "")
+    }
+
+    static func videoReconnectDelay(afterFailedAttempts attempts: Int) -> Duration {
+        let seconds = [2, 4, 8, 16, 30][min(max(attempts, 0), 4)]
+        return .seconds(seconds)
     }
 
     private func ensureCurrentConnectionAttempt(_ id: UUID) throws {
