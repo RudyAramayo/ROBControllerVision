@@ -84,6 +84,7 @@ final class RobotViewModel {
     @ObservationIgnored private var videoLifecycleTasks: [CameraID: Task<Void, Never>] = [:]
     @ObservationIgnored private var activeVideoDescriptors: [CameraID: VideoStreamDescriptor] = [:]
     @ObservationIgnored private var sceneIsActive = false
+    @ObservationIgnored private var videoPresentationIsActive = false
     @ObservationIgnored private var inputSequence: UInt64 = 0
     @ObservationIgnored private var latestGameControllerSample = GameControllerSample.disconnected
     @ObservationIgnored private var latestGameControllerSampleAtUptime: TimeInterval?
@@ -1447,8 +1448,13 @@ final class RobotViewModel {
         }
     }
 
-    func setSceneActive(_ active: Bool) {
+    func setSceneActive(_ active: Bool, preservingVideo: Bool = false) {
         sceneIsActive = active
+        if active {
+            videoPresentationIsActive = true
+        } else if !preservingVideo {
+            videoPresentationIsActive = false
+        }
         let activeVideoIDs = snapshot.videoStreams.map(\.id)
         if !active {
             clearPairingCodeDraft()
@@ -1458,14 +1464,16 @@ final class RobotViewModel {
             clearGripperInputTracking()
             pairedControllerGripGestureWasHeld = false
             latestGameControllerSampleAtUptime = nil
-            stopVideoPipeline()
+            if !preservingVideo {
+                stopVideoPipeline()
+            }
         } else {
             synchronizeVideoPipeline(from: snapshot)
         }
         let session = session
         Task {
             await session.setSceneActive(active)
-            if !active {
+            if !active, !preservingVideo {
                 for activeVideoID in activeVideoIDs {
                     try? await session.unsubscribeVideo(activeVideoID)
                 }
@@ -1863,7 +1871,7 @@ final class RobotViewModel {
     private func synchronizeVideoPipeline(from snapshot: RobotSessionSnapshot) {
         let desiredDescriptors = Dictionary(
             uniqueKeysWithValues: (
-                sceneIsActive && snapshot.connection.isReady
+                videoPresentationIsActive && snapshot.connection.isReady
                 ? snapshot.videoStreams
                 : []
             ).map { ($0.cameraID, $0) }
