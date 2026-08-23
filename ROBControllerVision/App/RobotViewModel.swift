@@ -178,7 +178,7 @@ final class RobotViewModel {
             ?? SimulatedRobotEndpoint(videoDataSource: SyntheticVideoDataSource())
         self.videoPipeline = videoPipeline
         self.bellyVideoPipeline = VideoPipelineCoordinator()
-        self.insta360VideoPipeline = VideoPipelineCoordinator()
+        self.insta360VideoPipeline = VideoPipelineCoordinator(capturesDecodedFrames: true)
         self.speechInput = VisionSpeechInput()
         self.pairingStore = pairingStore
         self.gameController = GameControllerInput()

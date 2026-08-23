@@ -31,6 +31,9 @@ public enum VideoPipelineError: Error, LocalizedError, Sendable {
         expectedHeight: Int
     )
     case sampleBufferCreationFailed(Int32)
+    case decompressionSessionCreationFailed(Int32)
+    case decompressionFailed(Int32)
+    case decompressedFrameDropped
     case invalidCodecConfiguration
     case codecConfigurationGenerationExhausted
     case channelClosed
@@ -92,6 +95,12 @@ public enum VideoPipelineError: Error, LocalizedError, Sendable {
                 + "\(expectedWidth)×\(expectedHeight)."
         case .sampleBufferCreationFailed(let status):
             "Creating the compressed sample buffer failed with status \(status)."
+        case .decompressionSessionCreationFailed(let status):
+            "Creating the H.264 decompression session failed with status \(status)."
+        case .decompressionFailed(let status):
+            "H.264 decompression failed with status \(status)."
+        case .decompressedFrameDropped:
+            "VideoToolbox dropped a decoded H.264 frame."
         case .invalidCodecConfiguration:
             "The H.264 codec configuration is incomplete or invalid."
         case .codecConfigurationGenerationExhausted:

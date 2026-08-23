@@ -1,5 +1,6 @@
 import AVFoundation
 import CoreMedia
+import CoreVideo
 import Foundation
 import ROBControlCore
 
@@ -42,10 +43,13 @@ public struct VideoReceiverStatistics: Equatable, Sendable {
 public actor H264VideoReceiver {
     public typealias StatisticsHandler = @Sendable (VideoReceiverStatistics) -> Void
     public typealias KeyFrameRequestHandler = @Sendable () -> Void
+    public typealias DecodedPixelBufferHandler = @Sendable (CVPixelBuffer) -> Void
+    public typealias DecodedPixelBufferErrorHandler = @Sendable (VideoPipelineError) -> Void
 
     private let renderer: AVSampleBufferVideoRenderer
     private let statisticsHandler: StatisticsHandler
     private let keyFrameRequestHandler: KeyFrameRequestHandler
+    private let pixelBufferDecoder: H264PixelBufferDecoder?
     private let expectedWidth: Int
     private let expectedHeight: Int
     private var validator: VideoStreamValidator
@@ -65,7 +69,9 @@ public actor H264VideoReceiver {
         stream: VideoStreamDescriptor,
         rendererHandle: SampleBufferVideoRendererHandle,
         statisticsHandler: @escaping StatisticsHandler = { _ in },
-        keyFrameRequestHandler: @escaping KeyFrameRequestHandler = {}
+        keyFrameRequestHandler: @escaping KeyFrameRequestHandler = {},
+        decodedPixelBufferHandler: DecodedPixelBufferHandler? = nil,
+        decodedPixelBufferErrorHandler: @escaping DecodedPixelBufferErrorHandler = { _ in }
     ) throws {
         guard stream.codec == .h264 else {
             throw VideoPipelineError.unsupportedCodec(stream.codec.rawValue)
@@ -73,6 +79,12 @@ public actor H264VideoReceiver {
         self.renderer = rendererHandle.renderer
         self.statisticsHandler = statisticsHandler
         self.keyFrameRequestHandler = keyFrameRequestHandler
+        self.pixelBufferDecoder = decodedPixelBufferHandler.map { handler in
+            H264PixelBufferDecoder(
+                outputHandler: handler,
+                errorHandler: decodedPixelBufferErrorHandler
+            )
+        }
         self.expectedWidth = Int(stream.width)
         self.expectedHeight = Int(stream.height)
         self.validator = VideoStreamValidator(sessionID: sessionID, stream: stream)
@@ -114,6 +126,7 @@ public actor H264VideoReceiver {
     public func stop() async {
         flushGeneration &+= 1
         await flushRenderer(removingDisplayedImage: true)
+        pixelBufferDecoder?.reset()
         sampleBufferFactory.reset()
         validator.requireKeyFrame()
         isRecovering = true
@@ -140,6 +153,7 @@ public actor H264VideoReceiver {
         if let codecConfigurationGeneration,
             codecConfigurationGeneration != configuration.generation
         {
+            pixelBufferDecoder?.reset()
             flushGeneration &+= 1
             let generation = flushGeneration
             await flushRenderer(removingDisplayedImage: false)
@@ -152,6 +166,25 @@ public actor H264VideoReceiver {
     }
 
     private func enqueue(_ accessUnit: EncodedVideoAccessUnit) async throws {
+        let sampleBuffer = try sampleBufferFactory.makeSampleBuffer(
+            payload: accessUnit.payload,
+            presentationTime: CMTime(
+                value: accessUnit.presentationTimestamp,
+                timescale: accessUnit.timescale
+            ),
+            duration: CMTime(value: accessUnit.duration, timescale: accessUnit.timescale),
+            isKeyFrame: accessUnit.isKeyFrame
+        )
+        if let pixelBufferDecoder {
+            do {
+                try pixelBufferDecoder.decode(sampleBuffer)
+            } catch let error as VideoPipelineError {
+                statistics.droppedAccessUnits &+= 1
+                await recoverDecoder()
+                throw error
+            }
+        }
+
         if renderer.requiresFlushToResumeDecoding || renderer.status == .failed {
             statistics.droppedAccessUnits &+= 1
             await recoverDecoder(forceFlush: true)
@@ -176,15 +209,6 @@ public actor H264VideoReceiver {
             return
         }
 
-        let sampleBuffer = try sampleBufferFactory.makeSampleBuffer(
-            payload: accessUnit.payload,
-            presentationTime: CMTime(
-                value: accessUnit.presentationTimestamp,
-                timescale: accessUnit.timescale
-            ),
-            duration: CMTime(value: accessUnit.duration, timescale: accessUnit.timescale),
-            isKeyFrame: accessUnit.isKeyFrame
-        )
         renderer.enqueue(sampleBuffer)
         statistics.renderedAccessUnits &+= 1
         if accessUnit.isKeyFrame {

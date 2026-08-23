@@ -23,7 +23,7 @@ struct SyntheticPixelBufferSourceTests {
         #expect(CVPixelBufferGetHeight(frame) == 180)
     }
 
-    @Test("Synthetic frames encode and reconstruct as compressed H.264 samples")
+    @Test("Synthetic frames encode, reconstruct, and decode as H.264 video")
     func h264RoundTrip() async throws {
         let output = AsyncStream<Result<H264EncodedFrame, VideoPipelineError>>.makeStream(
             bufferingPolicy: .bufferingNewest(2)
@@ -76,6 +76,30 @@ struct SyntheticPixelBufferSourceTests {
             isKeyFrame: encoded.isKeyFrame
         )
         #expect(CMSampleBufferDataIsReady(sample))
+
+        let decodedOutput = AsyncStream<Result<DecodedFrameDimensions, VideoPipelineError>>
+            .makeStream(bufferingPolicy: .bufferingNewest(1))
+        let decoder = H264PixelBufferDecoder(
+            outputHandler: { pixelBuffer in
+                decodedOutput.continuation.yield(
+                    .success(
+                        DecodedFrameDimensions(
+                            width: CVPixelBufferGetWidth(pixelBuffer),
+                            height: CVPixelBufferGetHeight(pixelBuffer)
+                        )
+                    )
+                )
+            },
+            errorHandler: { error in
+                decodedOutput.continuation.yield(.failure(error))
+            }
+        )
+        try decoder.decode(sample)
+        let decodedResult = await firstValue(in: decodedOutput.stream, timeout: .seconds(2))
+        let dimensions = try #require(try decodedResult?.get())
+        #expect(dimensions == DecodedFrameDimensions(width: 320, height: 180))
+        decoder.reset()
+        decodedOutput.continuation.finish()
         encoder.finish()
         output.continuation.finish()
     }
@@ -101,4 +125,9 @@ struct SyntheticPixelBufferSourceTests {
             return value
         }
     }
+}
+
+private struct DecodedFrameDimensions: Equatable, Sendable {
+    let width: Int
+    let height: Int
 }

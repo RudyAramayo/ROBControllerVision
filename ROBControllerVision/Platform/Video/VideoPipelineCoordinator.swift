@@ -26,6 +26,7 @@ enum VideoPipelineState: Equatable {
 final class VideoPipelineCoordinator {
     private(set) var state: VideoPipelineState = .idle
     private(set) var statistics = VideoReceiverStatistics()
+    private(set) var decodedFrameError: String?
     let displayLayer: AVSampleBufferDisplayLayer
 
     @ObservationIgnored private var receiver: H264VideoReceiver?
@@ -33,17 +34,19 @@ final class VideoPipelineCoordinator {
     @ObservationIgnored private var pipelineID: UUID?
     @ObservationIgnored private var closeDataStream: (@Sendable () async -> Void)?
     @ObservationIgnored private var lifecycleGeneration: UInt64 = 0
+    @ObservationIgnored private let capturesDecodedFrames: Bool
+    @ObservationIgnored private let decodedFrameStore = LatestVideoPixelBufferStore()
 
-    init() {
+    init(capturesDecodedFrames: Bool = false) {
         let displayLayer = AVSampleBufferDisplayLayer()
         displayLayer.videoGravity = .resizeAspect
         self.displayLayer = displayLayer
+        self.capturesDecodedFrames = capturesDecodedFrames
     }
 
-    /// Supplies the already-decoded frame to RealityKit's live sphere without
-    /// running a second H.264 decoder.
-    func displayedPixelBuffer() -> CVPixelBuffer? {
-        displayLayer.sampleBufferRenderer.displayedPixelBuffer()
+    /// Supplies the newest decoded frame to RealityKit independently of display-layer visibility.
+    func decodedFrame() -> (pixelBuffer: CVPixelBuffer, sequence: UInt64)? {
+        decodedFrameStore.current()
     }
 
     deinit {
@@ -71,6 +74,8 @@ final class VideoPipelineCoordinator {
         pipelineID = newPipelineID
         state = .starting
         statistics = VideoReceiverStatistics()
+        decodedFrameError = nil
+        decodedFrameStore.clear()
         var unownedOpenedChannelID: UUID?
 
         do {
@@ -90,6 +95,15 @@ final class VideoPipelineCoordinator {
             let rendererHandle = SampleBufferVideoRendererHandle(
                 displayLayer.sampleBufferRenderer
             )
+            let decodedFrameStore = decodedFrameStore
+            let decodedPixelBufferHandler: H264VideoReceiver.DecodedPixelBufferHandler?
+            if capturesDecodedFrames {
+                decodedPixelBufferHandler = { @Sendable pixelBuffer in
+                    decodedFrameStore.replace(with: pixelBuffer)
+                }
+            } else {
+                decodedPixelBufferHandler = nil
+            }
             let receiver = try H264VideoReceiver(
                 sessionID: sessionID,
                 stream: stream,
@@ -114,6 +128,13 @@ final class VideoPipelineCoordinator {
                                 requestsKeyFrame: true
                             )
                         )
+                    }
+                },
+                decodedPixelBufferHandler: decodedPixelBufferHandler,
+                decodedPixelBufferErrorHandler: { [weak self] error in
+                    Task { @MainActor in
+                        guard let self, self.pipelineID == newPipelineID else { return }
+                        self.decodedFrameError = error.localizedDescription
                     }
                 }
             )
@@ -180,11 +201,17 @@ final class VideoPipelineCoordinator {
         self.closeDataStream = nil
         state = .idle
         statistics = VideoReceiverStatistics()
+        decodedFrameError = nil
+        decodedFrameStore.clear()
 
         activeTask?.cancel()
         if let activeReceiver {
             await activeReceiver.stop()
         }
+        // `stop()` waits for outstanding VideoToolbox callbacks. Clear again
+        // afterward so a late frame from the retired decoder cannot seed the
+        // next immersive session with stale video.
+        decodedFrameStore.clear()
         await closeDataStream?()
     }
 
@@ -195,5 +222,32 @@ final class VideoPipelineCoordinator {
         await tearDownCurrentPipeline()
         guard lifecycleGeneration == generation else { return }
         state = .failed(errorMessage)
+    }
+}
+
+private nonisolated final class LatestVideoPixelBufferStore: @unchecked Sendable {
+    private let lock = NSLock()
+    private var pixelBuffer: CVPixelBuffer?
+    private var sequence: UInt64 = 0
+
+    func replace(with pixelBuffer: CVPixelBuffer) {
+        lock.lock()
+        self.pixelBuffer = pixelBuffer
+        sequence &+= 1
+        lock.unlock()
+    }
+
+    func current() -> (pixelBuffer: CVPixelBuffer, sequence: UInt64)? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let pixelBuffer else { return nil }
+        return (pixelBuffer, sequence)
+    }
+
+    func clear() {
+        lock.lock()
+        pixelBuffer = nil
+        sequence = 0
+        lock.unlock()
     }
 }

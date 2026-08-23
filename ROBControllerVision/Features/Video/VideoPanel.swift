@@ -295,8 +295,9 @@ struct Insta360ImmersiveView: View {
             }
         }
         .overlay(alignment: .bottomTrailing) {
-            // AVSampleBufferVideoRenderer needs a presentation target while
-            // RealityKit copies its decoded pixel buffer into the sphere.
+            // Keep the parallel flat renderer attached so switching back to
+            // the window does not require rebuilding its presentation state.
+            // The sphere itself uses the independent VideoToolbox frame path.
             SampleBufferVideoView(displayLayer: model.insta360VideoPipeline.displayLayer)
                 .frame(width: 2, height: 1)
                 .opacity(0.001)
@@ -305,6 +306,8 @@ struct Insta360ImmersiveView: View {
         .overlay(alignment: .top) {
             HStack(spacing: 12) {
                 Label("LIVE 360°", systemImage: "pano.fill")
+                Text(renderer.statusMessage)
+                    .foregroundStyle(.secondary)
                 if let errorMessage = renderer.errorMessage {
                     Text(errorMessage).foregroundStyle(.red)
                 }
@@ -329,32 +332,38 @@ struct Insta360ImmersiveView: View {
 @Observable
 private final class Insta360SphereRenderer {
     var errorMessage: String?
+    var statusMessage = "Preparing 360° texture…"
 
-    @ObservationIgnored private var lowLevelTexture: LowLevelTexture?
+    @ObservationIgnored private static let textureWidth = 960
+    @ObservationIgnored private static let textureHeight = 480
+    @ObservationIgnored private var textureResource: TextureResource?
+    @ObservationIgnored private var drawableQueue: TextureResource.DrawableQueue?
     @ObservationIgnored private var renderTask: Task<Void, Never>?
     @ObservationIgnored private let device = MTLCreateSystemDefaultDevice()
     @ObservationIgnored private var commandQueue: MTLCommandQueue?
     @ObservationIgnored private var ciContext: CIContext?
+    @ObservationIgnored private var lastPresentedSequence: UInt64?
+    @ObservationIgnored private var presentedFrameCount: UInt64 = 0
 
     func makeSphere() throws -> Entity {
         guard let device else {
             throw Insta360SphereError.metalUnavailable
         }
-        let descriptor = LowLevelTexture.Descriptor(
-            textureType: .type2D,
-            pixelFormat: .bgra8Unorm,
-            width: 960,
-            height: 480,
-            depth: 1,
-            mipmapLevelCount: 1,
-            arrayLength: 1,
-            // Core Image may use a compute kernel when rendering into this
-            // texture, which requires shader-write access. Without it the
-            // RealityKit material remains its initial black contents.
-            textureUsage: [.shaderRead, .shaderWrite, .renderTarget]
+        guard let commandQueue = device.makeCommandQueue() else {
+            throw Insta360SphereError.commandQueueUnavailable
+        }
+        let drawableQueue = try TextureResource.DrawableQueue(
+            .init(
+                pixelFormat: .bgra8Unorm,
+                width: Self.textureWidth,
+                height: Self.textureHeight,
+                usage: [.shaderRead, .shaderWrite, .renderTarget],
+                mipmapsMode: .none
+            )
         )
-        let lowLevelTexture = try LowLevelTexture(descriptor: descriptor)
-        let texture = try TextureResource(from: lowLevelTexture)
+        drawableQueue.allowsNextDrawableTimeout = true
+        let texture = try makeDiagnosticTexture()
+        texture.replace(withDrawables: drawableQueue)
         var material = UnlitMaterial(texture: texture)
         material.faceCulling = .none
         material.readsDepth = false
@@ -367,21 +376,49 @@ private final class Insta360SphereRenderer {
         // Flip the generated sphere so its textured face and UVs are visible
         // from the pilot's position at the center.
         sphere.scale = SIMD3<Float>(-1, 1, 1)
-        self.lowLevelTexture = lowLevelTexture
-        guard let commandQueue = device.makeCommandQueue() else {
-            throw Insta360SphereError.commandQueueUnavailable
-        }
+        self.textureResource = texture
+        self.drawableQueue = drawableQueue
         self.commandQueue = commandQueue
-        ciContext = CIContext(mtlDevice: device)
+        let ciContext = CIContext(mtlDevice: device)
+        self.ciContext = ciContext
+        try presentDiagnosticFrame(
+            using: drawableQueue,
+            commandQueue: commandQueue,
+            ciContext: ciContext
+        )
+        statusMessage = "Texture visible • waiting for video…"
         return sphere
     }
 
     func start(pipeline: VideoPipelineCoordinator) {
         renderTask?.cancel()
         renderTask = Task { [weak self] in
+            let clock = ContinuousClock()
+            let startedAt = clock.now
             while !Task.isCancelled {
-                self?.drawLatestFrame(from: pipeline)
-                try? await ContinuousClock().sleep(for: .milliseconds(33))
+                guard let self else { return }
+                do {
+                    switch try drawLatestFrame(from: pipeline) {
+                    case .noDecodedFrame:
+                        if startedAt.duration(to: clock.now) > .seconds(2) {
+                            statusMessage = "No decoded frame"
+                            errorMessage = pipeline.decodedFrameError
+                                ?? "Waiting for decoded Insta360 frames…"
+                        }
+                    case .unchanged:
+                        break
+                    case .presented:
+                        errorMessage = nil
+                        presentedFrameCount &+= 1
+                        if presentedFrameCount == 1 || presentedFrameCount.isMultiple(of: 30) {
+                            statusMessage = "Texture live • \(presentedFrameCount) frames"
+                        }
+                    }
+                } catch {
+                    statusMessage = "Texture upload failed"
+                    errorMessage = error.localizedDescription
+                }
+                try? await clock.sleep(for: .milliseconds(16))
             }
         }
     }
@@ -389,16 +426,24 @@ private final class Insta360SphereRenderer {
     func stop() {
         renderTask?.cancel()
         renderTask = nil
+        lastPresentedSequence = nil
+        presentedFrameCount = 0
     }
 
-    private func drawLatestFrame(from pipeline: VideoPipelineCoordinator) {
-        guard let pixelBuffer = pipeline.displayedPixelBuffer(),
-              let lowLevelTexture,
+    private func drawLatestFrame(
+        from pipeline: VideoPipelineCoordinator
+    ) throws -> SphereFrameDrawResult {
+        guard let frame = pipeline.decodedFrame() else { return .noDecodedFrame }
+        guard frame.sequence != lastPresentedSequence else { return .unchanged }
+        guard let drawableQueue,
               let commandBuffer = commandQueue?.makeCommandBuffer(),
-              let ciContext else { return }
-        let destination = lowLevelTexture.replace(using: commandBuffer)
+              let ciContext else {
+            throw Insta360SphereError.rendererNotReady
+        }
+        let drawable = try drawableQueue.nextDrawable()
+        let destination = drawable.texture
         let bounds = CGRect(x: 0, y: 0, width: destination.width, height: destination.height)
-        let source = CIImage(cvPixelBuffer: pixelBuffer)
+        let source = CIImage(cvPixelBuffer: frame.pixelBuffer)
         let normalized = source.transformed(
             by: CGAffineTransform(
                 translationX: -source.extent.minX,
@@ -427,13 +472,93 @@ private final class Insta360SphereRenderer {
             bounds: bounds,
             colorSpace: CGColorSpaceCreateDeviceRGB()
         )
+        observeCompletion(of: commandBuffer)
+        commandBuffer.present(drawable)
+        commandBuffer.commit()
+        lastPresentedSequence = frame.sequence
+        return .presented
+    }
+
+    private func presentDiagnosticFrame(
+        using drawableQueue: TextureResource.DrawableQueue,
+        commandQueue: MTLCommandQueue,
+        ciContext: CIContext
+    ) throws {
+        guard let commandBuffer = commandQueue.makeCommandBuffer() else {
+            throw Insta360SphereError.rendererNotReady
+        }
+        let drawable = try drawableQueue.nextDrawable()
+        let bounds = CGRect(
+            x: 0,
+            y: 0,
+            width: drawable.texture.width,
+            height: drawable.texture.height
+        )
+        let diagnosticImage = CIImage(
+            color: CIColor(red: 0.08, green: 0.2, blue: 0.55, alpha: 1)
+        ).cropped(to: bounds)
+        ciContext.render(
+            diagnosticImage,
+            to: drawable.texture,
+            commandBuffer: commandBuffer,
+            bounds: bounds,
+            colorSpace: CGColorSpaceCreateDeviceRGB()
+        )
+        observeCompletion(of: commandBuffer)
+        commandBuffer.present(drawable)
         commandBuffer.commit()
     }
+
+    private func observeCompletion(of commandBuffer: MTLCommandBuffer) {
+        commandBuffer.addCompletedHandler { [weak self] completedBuffer in
+            guard let error = completedBuffer.error else { return }
+            Task { @MainActor [weak self] in
+                self?.statusMessage = "GPU upload failed"
+                self?.errorMessage =
+                    "The 360° GPU upload failed: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func makeDiagnosticTexture() throws -> TextureResource {
+        let width = Self.textureWidth
+        let height = Self.textureHeight
+        var pixels = Data(count: width * height * 4)
+        pixels.withUnsafeMutableBytes { rawBuffer in
+            let bytes = rawBuffer.bindMemory(to: UInt8.self)
+            for y in 0..<height {
+                for x in 0..<width {
+                    let offset = ((y * width) + x) * 4
+                    let alternate = ((x / 80) + (y / 80)).isMultiple(of: 2)
+                    bytes[offset] = alternate ? 32 : 180
+                    bytes[offset + 1] = 32
+                    bytes[offset + 2] = alternate ? 180 : 32
+                    bytes[offset + 3] = 255
+                }
+            }
+        }
+        return try TextureResource(
+            dimensions: .dimensions(width: width, height: height),
+            format: .raw(pixelFormat: .bgra8Unorm),
+            contents: .init(
+                mipmapLevels: [
+                    .mip(data: pixels, bytesPerRow: width * 4)
+                ]
+            )
+        )
+    }
+}
+
+private enum SphereFrameDrawResult {
+    case noDecodedFrame
+    case unchanged
+    case presented
 }
 
 private enum Insta360SphereError: LocalizedError {
     case metalUnavailable
     case commandQueueUnavailable
+    case rendererNotReady
 
     var errorDescription: String? {
         switch self {
@@ -441,6 +566,8 @@ private enum Insta360SphereError: LocalizedError {
             "The headset could not create the Metal renderer for the 360° sphere."
         case .commandQueueUnavailable:
             "The headset could not create the Metal command queue for the 360° sphere."
+        case .rendererNotReady:
+            "The 360° texture renderer is not ready."
         }
     }
 }
