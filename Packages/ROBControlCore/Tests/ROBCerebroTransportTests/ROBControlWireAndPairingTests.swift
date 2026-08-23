@@ -5,6 +5,18 @@ import Testing
 
 @Suite("Cerebro control pairing and wire compatibility")
 struct ROBControlWireAndPairingTests {
+    @Test("Video QUIC permits only the controller-opened stream")
+    func videoQUICStreamContract() throws {
+        let credential = fixtureCredential()
+        _ = try ROBVideoClient.makeClientParameters(credential: credential)
+        #expect(
+            ROBVideoQUICStreamPolicy.maximumServerInitiatedBidirectionalStreams == 0
+        )
+        #expect(
+            ROBVideoQUICStreamPolicy.maximumServerInitiatedUnidirectionalStreams == 0
+        )
+    }
+
     @Test("Video authentication opens the client QUIC stream before the challenge")
     func videoAuthenticationHelloWireLayout() throws {
         let controllerID = try #require(

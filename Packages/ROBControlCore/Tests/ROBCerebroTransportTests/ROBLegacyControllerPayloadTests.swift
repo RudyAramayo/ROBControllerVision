@@ -178,6 +178,20 @@ struct ROBLegacyControllerPayloadTests {
         #expect(ROBLegacyControllerPayload.decodeControlAuthorityState(Data()) == nil)
     }
 
+    @Test("Authority probe safely traverses another archived message containing Data")
+    func authorityProbeAllowsDataPayloads() throws {
+        let data = try NSKeyedArchiver.archivedData(
+            withRootObject: [
+                "message": "RobotActionMessageV1",
+                "sender": "Cerebro",
+                "robot_action": Data([0x01, 0x02, 0x03]),
+            ] as NSDictionary,
+            requiringSecureCoding: true
+        )
+
+        #expect(ROBLegacyControllerPayload.decodeControlAuthorityState(data) == nil)
+    }
+
     @Test("Operator text carries an explicit execution mode")
     func operatorText() throws {
         let senderID = UUID(uuidString: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")!
@@ -196,7 +210,7 @@ struct ROBLegacyControllerPayloadTests {
 
     private func decode(_ data: Data) throws -> NSDictionary? {
         try NSKeyedUnarchiver.unarchivedObject(
-            ofClasses: [NSDictionary.self, NSString.self],
+            ofClasses: [NSDictionary.self, NSString.self, NSData.self],
             from: data
         ) as? NSDictionary
     }

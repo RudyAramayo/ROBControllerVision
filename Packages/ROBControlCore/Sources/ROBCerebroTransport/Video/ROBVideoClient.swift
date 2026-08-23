@@ -9,6 +9,11 @@ public enum ROBVideoClientEvent: Equatable, Sendable {
     case disconnected(reason: String)
 }
 
+enum ROBVideoQUICStreamPolicy {
+    static let maximumServerInitiatedBidirectionalStreams = 0
+    static let maximumServerInitiatedUnidirectionalStreams = 0
+}
+
 /// Authenticated `robvideo/1` client and bounded encoded-media data plane.
 ///
 /// A client is deliberately bound to one already-filtered endpoint. The caller must subscribe with
@@ -345,7 +350,7 @@ public actor ROBVideoClient: RobotVideoDataTransport {
         }
     }
 
-    private static func makeClientParameters(
+    static func makeClientParameters(
         credential: ROBCerebroCredential
     ) throws -> NWParameters {
         guard credential.isValid else {
@@ -354,6 +359,13 @@ public actor ROBVideoClient: RobotVideoDataTransport {
         let quic = NWProtocolQUIC.Options(alpn: [ROBCerebroVideoProtocol.applicationProtocol])
         quic.direction = .bidirectional
         quic.idleTimeout = 10_000
+        // robvideo/1 opens exactly one controller-initiated bidirectional
+        // stream. The authentication hello opens it before Cerebro replies,
+        // so no server-initiated stream is valid or necessary.
+        quic.initialMaxStreamsBidirectional =
+            ROBVideoQUICStreamPolicy.maximumServerInitiatedBidirectionalStreams
+        quic.initialMaxStreamsUnidirectional =
+            ROBVideoQUICStreamPolicy.maximumServerInitiatedUnidirectionalStreams
         let securityOptions = quic.securityProtocolOptions
         sec_protocol_options_set_min_tls_protocol_version(securityOptions, .TLSv13)
         ROBCerebroPinnedTLS.installExactLeafPin(

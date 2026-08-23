@@ -85,7 +85,7 @@ struct VideoPanel: View {
                 if let stream {
                     if camera.id.rawValue == "insta360" {
                         VStack(spacing: 10) {
-                            Image(systemName: "view.360")
+                            Image(systemName: "pano.fill")
                                 .font(.system(size: 42))
                             Text("Choose 360 Window or Immersive")
                                 .font(.headline)

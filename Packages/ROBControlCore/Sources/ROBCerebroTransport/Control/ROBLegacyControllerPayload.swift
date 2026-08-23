@@ -23,7 +23,12 @@ enum ROBLegacyControllerPayload {
     ) -> ROBLegacyControlAuthorityState? {
         guard !data.isEmpty, data.count <= maximumArchivedBytes,
               let envelope = try? NSKeyedUnarchiver.unarchivedObject(
-                ofClasses: [NSDictionary.self, NSString.self],
+                // The authority probe runs before other archived application
+                // messages are dispatched. Those envelopes may legitimately
+                // contain a Data payload, so it must be part of the secure
+                // traversal set even though an authority update itself uses
+                // only strings.
+                ofClasses: [NSDictionary.self, NSString.self, NSData.self],
                 from: data
               ) as? NSDictionary,
               envelope["message"] as? String == authorityStateMarker,
