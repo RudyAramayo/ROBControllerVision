@@ -44,6 +44,7 @@ struct ContentView: View {
         #if DEBUG
             .task {
                 if ProcessInfo.processInfo.arguments.contains("--immersive-smoke-test") {
+                    try? await ContinuousClock().sleep(for: .seconds(1))
                     _ = await openImmersiveSpace(id: "insta360-immersive")
                 }
             }
