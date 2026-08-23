@@ -14,6 +14,15 @@ struct ROBControllerVisionApp: App {
                 }
         }
         .defaultSize(width: 1_760, height: 920)
-        .windowResizability(.contentSize)
+
+        WindowGroup(id: "insta360-window") {
+            Insta360WindowView(model: model)
+        }
+        .defaultSize(width: 1_100, height: 640)
+
+        ImmersiveSpace(id: "insta360-immersive") {
+            Insta360ImmersiveView(model: model)
+        }
+        .immersionStyle(selection: .constant(.full), in: .full)
     }
 }

@@ -1,11 +1,13 @@
 import Foundation
+@preconcurrency import Network
 import ROBControlCore
 
 /// Production Vision Pro adapter for Cerebro.
 ///
-/// One actor owns two independently authenticated QUIC connections. `robctl/2` is authoritative
-/// for safety and supplies the live session UUID; `robvideo/1` carries only camera negotiation,
-/// feedback, and encoded media. Video pressure therefore never enters the motion-command queue.
+/// One actor owns the authoritative `robctl/2` connection plus an isolated authenticated
+/// `robvideo/1` connection for each enabled camera. Control supplies the live session UUID;
+/// media carries only camera negotiation, feedback, and encoded frames. Video pressure therefore
+/// never enters the motion-command queue or another camera's ordered stream.
 public actor CerebroRobotTransport: RobotTransport, RobotVideoDataTransport {
     public nonisolated let descriptor: RobotEndpointDescriptor
     public nonisolated let credential: ROBCerebroCredential
@@ -13,13 +15,19 @@ public actor CerebroRobotTransport: RobotTransport, RobotVideoDataTransport {
     private let controlClient: ROBControlClient
     private let videoDiscovery: ROBVideoDiscovery
     private var videoClient: ROBVideoClient?
+    private var videoEndpoint: NWEndpoint?
+    private var videoClientsByID: [UUID: ROBVideoClient] = [:]
+    private var videoClientIDBySubscriptionID: [VideoSubscriptionID: UUID] = [:]
+    private var videoClientIDByDataChannelID: [UUID: UUID] = [:]
+    private var videoUnavailableReason: String?
 
     private var connectionAttemptID: UUID?
     private var activeSessionID: UUID?
     private var lastCommandSequence: UInt64 = 0
     private var isDisconnecting = false
     private var controlEventTask: Task<Void, Never>?
-    private var videoEventTask: Task<Void, Never>?
+    private var videoEventTasks: [UUID: Task<Void, Never>] = [:]
+    private var videoReconnectTask: Task<Void, Never>?
     private var activeVideoStreams: Set<VideoSubscriptionID> = []
     private var eventSubscribers: [UUID: AsyncStream<RobotEvent>.Continuation] = [:]
 
@@ -37,7 +45,8 @@ public actor CerebroRobotTransport: RobotTransport, RobotVideoDataTransport {
 
     deinit {
         controlEventTask?.cancel()
-        videoEventTask?.cancel()
+        for task in videoEventTasks.values { task.cancel() }
+        videoReconnectTask?.cancel()
         for continuation in eventSubscribers.values {
             continuation.finish()
         }
@@ -71,25 +80,18 @@ public actor CerebroRobotTransport: RobotTransport, RobotVideoDataTransport {
 
             var cameras: [CameraDescriptor] = []
             do {
-                let discoveredVideo = try await videoDiscovery.discover(
-                    credential: credential,
-                    timeout: .seconds(3)
-                )
+                cameras = try await connectVideoService(discoveryTimeout: .seconds(3))
                 try ensureCurrentConnectionAttempt(attemptID)
-
-                let videoClient = ROBVideoClient(
-                    endpoint: discoveredVideo.endpoint,
-                    credential: credential
-                )
-                self.videoClient = videoClient
-                startVideoEventMonitor(client: videoClient)
-                cameras = try await videoClient.connect()
-                try ensureCurrentConnectionAttempt(attemptID)
+                if cameras.isEmpty {
+                    throw ROBCerebroTransportError.videoUnavailable
+                }
+                videoUnavailableReason = nil
             } catch {
                 if error is CancellationError || Task.isCancelled {
                     throw error
                 }
                 try ensureCurrentConnectionAttempt(attemptID)
+                videoUnavailableReason = Self.videoDiagnostic(from: error)
                 await tearDownVideoConnection()
             }
 
@@ -98,22 +100,22 @@ public actor CerebroRobotTransport: RobotTransport, RobotVideoDataTransport {
                     "The bound control session ended while the video service was connecting."
                 )
             }
+            try ensureCurrentConnectionAttempt(attemptID)
 
             activeSessionID = sessionID
             lastCommandSequence = 0
             connectionAttemptID = nil
+            if videoClient == nil {
+                cameras = []
+            }
 
             let handshake = RobotHandshake(
                 protocolVersion: RobotCommandEnvelope.currentProtocolVersion,
                 sessionID: sessionID,
                 robotName: descriptor.name,
-                capabilities: RobotCapabilities(
-                    supportsMotionControl: true,
-                    // The network stop below brakes and releases authority; the independently
-                    // wired physical emergency stop remains the definitive emergency mechanism.
-                    supportsEmergencyStop: false,
-                    supportsArmControlExecution: true,
-                    cameras: cameras
+                capabilities: Self.capabilities(
+                    cameras: cameras,
+                    videoUnavailableReason: videoUnavailableReason
                 ),
                 safetyState: MotionSafetyState(
                     isArmed: false,
@@ -122,6 +124,9 @@ public actor CerebroRobotTransport: RobotTransport, RobotVideoDataTransport {
                 )
             )
             publish(.connected(handshake))
+            if cameras.isEmpty {
+                scheduleVideoReconnect()
+            }
             return handshake
         } catch {
             if connectionAttemptID == attemptID {
@@ -275,22 +280,39 @@ public actor CerebroRobotTransport: RobotTransport, RobotVideoDataTransport {
             )
 
         case .video(let message):
-            guard let videoClient else {
+            guard videoClient != nil || !videoClientsByID.isEmpty else {
                 throw ROBCerebroTransportError.videoUnavailable
             }
             switch message {
             case .subscribe(let request):
-                _ = try await videoClient.subscribe(
-                    sessionID: activeSessionID,
-                    request: request
+                let (clientID, client) = try await acquireVideoClient(
+                    for: request.id
                 )
+                videoClientIDBySubscriptionID[request.id] = clientID
+                do {
+                    _ = try await client.subscribe(
+                        sessionID: activeSessionID,
+                        request: request
+                    )
+                } catch {
+                    if videoClientIDBySubscriptionID[request.id] == clientID {
+                        videoClientIDBySubscriptionID.removeValue(forKey: request.id)
+                    }
+                    throw error
+                }
             case .unsubscribe(let request):
-                try await videoClient.unsubscribe(
+                guard let client = videoClient(for: request.id) else {
+                    throw VideoDataTransportError.subscriptionNotFound(request.id)
+                }
+                try await client.unsubscribe(
                     sessionID: activeSessionID,
                     id: request.id
                 )
             case .feedback(let feedback):
-                try await videoClient.sendFeedback(
+                guard let client = videoClient(for: feedback.id) else {
+                    throw VideoDataTransportError.subscriptionNotFound(feedback.id)
+                }
+                try await client.sendFeedback(
                     sessionID: activeSessionID,
                     feedback: feedback
                 )
@@ -310,17 +332,23 @@ public actor CerebroRobotTransport: RobotTransport, RobotVideoDataTransport {
         sessionID: UUID,
         stream: VideoStreamDescriptor
     ) async throws -> RobotVideoDataChannel {
-        guard sessionID == activeSessionID, let videoClient else {
+        guard sessionID == activeSessionID,
+              let clientID = videoClientIDBySubscriptionID[stream.id],
+              let videoClient = videoClientsByID[clientID] else {
             throw VideoDataTransportError.inactiveSession
         }
-        return try await videoClient.openVideoDataStream(
+        let channel = try await videoClient.openVideoDataStream(
             sessionID: sessionID,
             stream: stream
         )
+        videoClientIDByDataChannelID[channel.id] = clientID
+        return channel
     }
 
     public func closeVideoDataChannel(_ id: UUID) async {
-        await videoClient?.closeVideoDataChannel(id)
+        guard let clientID = videoClientIDByDataChannelID.removeValue(forKey: id),
+              let client = videoClientsByID[clientID] else { return }
+        await client.closeVideoDataChannel(id)
     }
 
     private func sendStoppedAndReleaseAuthority() async throws {
@@ -344,13 +372,135 @@ public actor CerebroRobotTransport: RobotTransport, RobotVideoDataTransport {
         }
     }
 
-    private func startVideoEventMonitor(client: ROBVideoClient) {
-        videoEventTask?.cancel()
-        videoEventTask = Task { [weak self] in
+    private func startVideoEventMonitor(clientID: UUID, client: ROBVideoClient) {
+        videoEventTasks[clientID]?.cancel()
+        videoEventTasks[clientID] = Task { [weak self] in
             let events = await client.events()
             for await event in events {
                 guard !Task.isCancelled else { return }
-                await self?.handleVideoClientEvent(event, source: client)
+                await self?.handleVideoClientEvent(
+                    event,
+                    sourceID: clientID,
+                    source: client
+                )
+            }
+        }
+    }
+
+    private func connectVideoService(
+        discoveryTimeout: Duration
+    ) async throws -> [CameraDescriptor] {
+        guard videoClientsByID.isEmpty else {
+            throw ROBCerebroTransportError.connectionFailed(
+                "A Cerebro video connection is already active."
+            )
+        }
+        let discoveredVideo = try await videoDiscovery.discover(
+            credential: credential,
+            timeout: discoveryTimeout
+        )
+        videoEndpoint = discoveredVideo.endpoint
+        let client = ROBVideoClient(
+            endpoint: discoveredVideo.endpoint,
+            credential: credential
+        )
+        let clientID = UUID()
+        videoClient = client
+        videoClientsByID[clientID] = client
+        startVideoEventMonitor(clientID: clientID, client: client)
+        do {
+            return try await client.connect()
+        } catch {
+            videoEventTasks.removeValue(forKey: clientID)?.cancel()
+            videoClientsByID.removeValue(forKey: clientID)
+            if videoClient === client { videoClient = nil }
+            throw error
+        }
+    }
+
+    private func acquireVideoClient(
+        for subscriptionID: VideoSubscriptionID
+    ) async throws -> (UUID, ROBVideoClient) {
+        if videoClientIDBySubscriptionID[subscriptionID] != nil {
+            throw VideoSubscriptionError.duplicateID(subscriptionID)
+        }
+        let occupied = Set(videoClientIDBySubscriptionID.values)
+        if let available = videoClientsByID.first(where: { !occupied.contains($0.key) }) {
+            videoClientIDBySubscriptionID[subscriptionID] = available.key
+            return (available.key, available.value)
+        }
+        guard videoClientsByID.count < 3, let videoEndpoint else {
+            throw ROBCerebroTransportError.videoUnavailable
+        }
+
+        let clientID = UUID()
+        let client = ROBVideoClient(endpoint: videoEndpoint, credential: credential)
+        videoClientsByID[clientID] = client
+        videoClientIDBySubscriptionID[subscriptionID] = clientID
+        startVideoEventMonitor(clientID: clientID, client: client)
+        do {
+            let cameras = try await client.connect()
+            guard !cameras.isEmpty else { throw ROBCerebroTransportError.videoUnavailable }
+            return (clientID, client)
+        } catch {
+            videoEventTasks.removeValue(forKey: clientID)?.cancel()
+            videoClientsByID.removeValue(forKey: clientID)
+            if videoClientIDBySubscriptionID[subscriptionID] == clientID {
+                videoClientIDBySubscriptionID.removeValue(forKey: subscriptionID)
+            }
+            await client.disconnect()
+            throw error
+        }
+    }
+
+    private func videoClient(for subscriptionID: VideoSubscriptionID) -> ROBVideoClient? {
+        guard let clientID = videoClientIDBySubscriptionID[subscriptionID] else { return nil }
+        return videoClientsByID[clientID]
+    }
+
+    private func scheduleVideoReconnect() {
+        guard activeSessionID != nil,
+              !isDisconnecting,
+              videoClientsByID.isEmpty,
+              videoReconnectTask == nil else { return }
+        let expectedSessionID = activeSessionID
+        videoReconnectTask = Task { [weak self] in
+            do {
+                try await ContinuousClock().sleep(for: .seconds(2))
+            } catch {
+                return
+            }
+            await self?.attemptVideoReconnect(expectedSessionID: expectedSessionID)
+        }
+    }
+
+    private func attemptVideoReconnect(expectedSessionID: UUID?) async {
+        videoReconnectTask = nil
+        guard let expectedSessionID,
+              activeSessionID == expectedSessionID,
+              !isDisconnecting,
+              videoClientsByID.isEmpty else { return }
+        do {
+            let cameras = try await connectVideoService(discoveryTimeout: .seconds(5))
+            guard !cameras.isEmpty else {
+                throw ROBCerebroTransportError.videoUnavailable
+            }
+            guard await controlClient.liveSessionID() == expectedSessionID,
+                  activeSessionID == expectedSessionID,
+                  !isDisconnecting else {
+                throw ROBCerebroTransportError.cancelled
+            }
+            videoUnavailableReason = nil
+            publish(.capabilitiesChanged(Self.capabilities(cameras: cameras)))
+        } catch {
+            videoUnavailableReason = Self.videoDiagnostic(from: error)
+            await tearDownVideoConnection()
+            if activeSessionID == expectedSessionID, !isDisconnecting {
+                publish(.capabilitiesChanged(Self.capabilities(
+                    cameras: [],
+                    videoUnavailableReason: videoUnavailableReason
+                )))
+                scheduleVideoReconnect()
             }
         }
     }
@@ -363,7 +513,10 @@ public actor CerebroRobotTransport: RobotTransport, RobotVideoDataTransport {
             lastCommandSequence = 0
             let streams = activeVideoStreams
             activeVideoStreams.removeAll()
-            await videoClient?.disconnect()
+            videoClientIDBySubscriptionID.removeAll()
+            videoClientIDByDataChannelID.removeAll()
+            let clients = Array(videoClientsByID.values)
+            for client in clients { await client.disconnect() }
             for id in streams {
                 publish(.video(.ended(id: id, reason: "The bound control session ended.")))
             }
@@ -440,33 +593,56 @@ public actor CerebroRobotTransport: RobotTransport, RobotVideoDataTransport {
 
     private func handleVideoClientEvent(
         _ event: ROBVideoClientEvent,
+        sourceID: UUID,
         source: ROBVideoClient
     ) async {
-        guard videoClient === source else { return }
+        guard videoClientsByID[sourceID] === source else { return }
         switch event {
         case .subscriptionResponse(let sessionID, let response):
             guard sessionID == activeSessionID else { return }
             switch response {
             case .accepted(let stream):
+                videoClientIDBySubscriptionID[stream.id] = sourceID
                 activeVideoStreams.insert(stream.id)
-            case .rejected:
-                break
+            case .rejected(let id, _):
+                if videoClientIDBySubscriptionID[id] == sourceID {
+                    videoClientIDBySubscriptionID.removeValue(forKey: id)
+                }
             }
             publish(.video(.subscription(response)))
 
         case .streamEnded(let sessionID, let id, let reason):
             guard sessionID == activeSessionID else { return }
             activeVideoStreams.remove(id)
+            if videoClientIDBySubscriptionID[id] == sourceID {
+                videoClientIDBySubscriptionID.removeValue(forKey: id)
+            }
             publish(.video(.ended(id: id, reason: reason)))
 
         case .disconnected(let reason):
-            videoEventTask?.cancel()
-            videoEventTask = nil
-            videoClient = nil
-            let streams = activeVideoStreams
-            activeVideoStreams.removeAll()
+            videoEventTasks.removeValue(forKey: sourceID)?.cancel()
+            videoClientsByID.removeValue(forKey: sourceID)
+            if videoClient === source {
+                videoClient = videoClientsByID.values.first
+            }
+            let streams = Set(videoClientIDBySubscriptionID.compactMap { entry in
+                entry.value == sourceID ? entry.key : nil
+            })
             for id in streams {
+                videoClientIDBySubscriptionID.removeValue(forKey: id)
+                activeVideoStreams.remove(id)
                 publish(.video(.ended(id: id, reason: reason)))
+            }
+            videoClientIDByDataChannelID = videoClientIDByDataChannelID.filter {
+                $0.value != sourceID
+            }
+            if activeSessionID != nil, videoClientsByID.isEmpty {
+                videoUnavailableReason = Self.videoDiagnostic(reason)
+                publish(.capabilitiesChanged(Self.capabilities(
+                    cameras: [],
+                    videoUnavailableReason: videoUnavailableReason
+                )))
+                scheduleVideoReconnect()
             }
         }
     }
@@ -479,13 +655,47 @@ public actor CerebroRobotTransport: RobotTransport, RobotVideoDataTransport {
     }
 
     private func tearDownVideoConnection() async {
-        videoEventTask?.cancel()
-        videoEventTask = nil
-        let videoClient = self.videoClient
+        videoReconnectTask?.cancel()
+        videoReconnectTask = nil
+        let clients = Array(videoClientsByID.values)
+        for task in videoEventTasks.values { task.cancel() }
+        videoEventTasks.removeAll()
         self.videoClient = nil
-        await videoClient?.disconnect()
+        videoEndpoint = nil
+        videoClientsByID.removeAll()
+        videoClientIDBySubscriptionID.removeAll()
+        videoClientIDByDataChannelID.removeAll()
+        for client in clients { await client.disconnect() }
         await videoDiscovery.cancel()
         activeVideoStreams.removeAll()
+    }
+
+    private static func capabilities(
+        cameras: [CameraDescriptor],
+        videoUnavailableReason: String? = nil
+    ) -> RobotCapabilities {
+        RobotCapabilities(
+            supportsMotionControl: true,
+            // Network stop brakes and releases authority; the independently
+            // wired physical emergency stop remains the definitive mechanism.
+            supportsEmergencyStop: false,
+            supportsArmControlExecution: true,
+            cameras: cameras,
+            videoUnavailableReason: videoUnavailableReason
+        )
+    }
+
+    private static func videoDiagnostic(from error: Error) -> String {
+        videoDiagnostic(error.localizedDescription)
+    }
+
+    private static func videoDiagnostic(_ detail: String) -> String {
+        let singleLine = detail
+            .split(whereSeparator: { $0.isWhitespace })
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let bounded = singleLine.isEmpty ? "The video connection ended unexpectedly." : singleLine
+        return String(bounded.prefix(320)) + (bounded.count > 320 ? "…" : "")
     }
 
     private func ensureCurrentConnectionAttempt(_ id: UUID) throws {

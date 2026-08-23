@@ -14,6 +14,7 @@ public enum ROBCerebroTransportError: Error, Equatable, LocalizedError, Sendable
     case invalidWireMessage
     case invalidApplicationPayload
     case videoUnavailable
+    case videoCapacityReached
     case protocolMismatch(String)
 
     public var errorDescription: String? {
@@ -44,6 +45,8 @@ public enum ROBCerebroTransportError: Error, Equatable, LocalizedError, Sendable
             "The controller application payload was invalid or oversized."
         case .videoUnavailable:
             "Cerebro's video service is unavailable."
+        case .videoCapacityReached:
+            "Cerebro has reached the authenticated video-connection limit for this controller. Pair each physical controller with its own Cerebro-issued code."
         case .protocolMismatch(let detail):
             "Cerebro protocol mismatch: \(detail)"
         }

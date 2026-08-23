@@ -201,15 +201,17 @@ or losing the session cannot silently preserve approval.
 
 Video capabilities, subscription requests and responses, receiver feedback, unsubscribe, stream-ended events, and media all use `_robvideo._udp`. None of them is placed on the `_robctl._udp` connection. `RobotSession` models these as control-domain operations, while `CerebroRobotTransport` routes them to the independent physical video channel.
 
-Every video request carries the exact live control-session UUID. Cerebro authorizes the request only when that UUID is still registered to the same authenticated `operatorController`. A locally generated or stale UUID fails closed. Control disconnect, session replacement, credential revocation, video failure, scene suspension, or explicit unsubscribe closes the media channel without weakening control safety. Video loss ends active streams but deliberately leaves the authenticated control connection ready. The adapter does not hot-reconnect video or republish capabilities during that session; reconnecting the Cerebro endpoint performs a fresh video attempt.
+Every video request carries the exact live control-session UUID. Cerebro authorizes the request only when that UUID is still registered to the same authenticated `operatorController`. A locally generated or stale UUID fails closed. Control disconnect, session replacement, credential revocation, video failure, scene suspension, or explicit unsubscribe closes the media channel without weakening control safety. Video loss ends active streams but deliberately leaves the authenticated control connection ready. The adapter retries media discovery and authentication independently, then republishes authenticated camera capabilities into that same control session.
 
 The pipeline forces a keyframe on start and recovery and stops on consumer cancellation, scene inactivity, unsubscribe, or disconnect. A sequence gap invalidates predictive frames until another IDR arrives. Duplicate or stale traffic is discarded where safe; malformed current-session media fails the stream closed.
 
 ## Current production profile
 
-- One monoscopic `front` camera.
+- Concurrent monoscopic `front`, `belly`, and stitched equirectangular
+  `insta360` cameras, each independently switchable.
 - H.264 AVCC only, up to 960 x 540, 20 fps, and 1.5 Mbit/s.
 - Ordered `reliableStream` QUIC delivery; no QUIC datagrams.
 - Live viewing only; no recording, replay, audio, depth, stereo, or spatial-video track.
-- Cerebro permits at most two authenticated video controllers and one active stream per video connection.
+- Cerebro permits one active stream per authenticated media connection and up
+  to three such connections for one controller, isolating camera backpressure.
 - The control application payload remains a private compatibility translation until all robot applications share a typed replacement. The `ROBControlCore` domain contract is not changed to match that legacy representation.

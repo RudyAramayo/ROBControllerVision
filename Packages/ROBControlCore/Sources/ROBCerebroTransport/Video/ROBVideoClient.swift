@@ -384,7 +384,30 @@ public actor ROBVideoClient: RobotVideoDataTransport {
         }
         phase = .awaitingChallenge
         armAuthenticationTimeout(attemptID: attemptID)
-        receiveNextMessage(attemptID: attemptID)
+        Task { [weak self] in
+            await self?.sendAuthenticationHello(attemptID: attemptID)
+        }
+    }
+
+    /// Make the controller the initiator of the bidirectional QUIC stream.
+    /// Cerebro waits for this message before writing its challenge, so every
+    /// reply stays on the same `NWConnection` instead of opening remote stream
+    /// 1, which would require a separate `NWConnectionGroup` listener.
+    private func sendAuthenticationHello(attemptID: UUID) async {
+        do {
+            let hello = ROBVideoAuthenticationHello(
+                controllerID: credential.controllerID
+            )
+            try await sendFrame(type: .authenticationHello, data: hello.encoded)
+            guard connectionAttemptID == attemptID,
+                  case .awaitingChallenge = phase else { return }
+            receiveNextMessage(attemptID: attemptID)
+        } catch {
+            stopConnection(
+                error: Self.transportError(from: error),
+                expectedAttemptID: attemptID
+            )
+        }
     }
 
     private func connectionFailed(_ detail: String, attemptID: UUID) {
@@ -469,6 +492,9 @@ public actor ROBVideoClient: RobotVideoDataTransport {
         }
 
         do {
+            if type == .authenticationRejected {
+                throw ROBVideoAuthenticationRejectionCode.transportError(from: data)
+            }
             switch phase {
             case .awaitingChallenge:
                 guard type == .authenticationChallenge else {
@@ -539,6 +565,7 @@ public actor ROBVideoClient: RobotVideoDataTransport {
         case .streamEnded:
             try handleStreamEnded(data)
         case .authenticationChallenge,
+            .authenticationHello,
             .authenticationProof,
             .authenticationAccepted,
             .authenticationRejected,

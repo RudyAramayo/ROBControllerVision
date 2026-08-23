@@ -443,6 +443,7 @@ public enum RobotSafetyEvent: Equatable, Sendable {
 
 public enum RobotEvent: Equatable, Sendable {
     case connected(RobotHandshake)
+    case capabilitiesChanged(RobotCapabilities)
     case disconnected(reason: String)
     case telemetry(RobotTelemetry)
     case armTelemetry(RobotArmMeasuredState)

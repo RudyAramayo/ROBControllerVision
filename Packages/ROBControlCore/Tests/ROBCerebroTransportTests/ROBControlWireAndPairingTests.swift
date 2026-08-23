@@ -5,6 +5,73 @@ import Testing
 
 @Suite("Cerebro control pairing and wire compatibility")
 struct ROBControlWireAndPairingTests {
+    @Test("Video authentication opens the client QUIC stream before the challenge")
+    func videoAuthenticationHelloWireLayout() throws {
+        let controllerID = try #require(
+            UUID(uuidString: "10213243-5465-7687-98a9-bacbdcedfe0f")
+        )
+        let hello = ROBVideoAuthenticationHello(controllerID: controllerID)
+        #expect(ROBVideoMessageType.authenticationHello.rawValue == 13)
+        #expect(hello.encoded.count == ROBVideoAuthenticationHello.encodedSize)
+        #expect(hello.encoded.first == ROBCerebroVideoProtocol.protocolVersion)
+        #expect(Data(hello.encoded.dropFirst()) == controllerID.robVideoBytes)
+    }
+
+    @Test("Video authentication rejection codes preserve the actual failure")
+    func videoAuthenticationRejectionReasons() {
+        #expect(
+            ROBVideoAuthenticationRejectionCode.transportError(from: Data([1]))
+                == .authenticationFailed
+        )
+        #expect(
+            ROBVideoAuthenticationRejectionCode.transportError(from: Data([2]))
+                == .authorizationFailed
+        )
+        #expect(
+            ROBVideoAuthenticationRejectionCode.transportError(from: Data([3]))
+                == .videoCapacityReached
+        )
+        #expect(
+            ROBVideoAuthenticationRejectionCode.transportError(from: Data([4]))
+                == .invalidWireMessage
+        )
+        #expect(
+            ROBVideoAuthenticationRejectionCode.transportError(from: Data())
+                == .invalidWireMessage
+        )
+    }
+
+    @Test("A sole video route tolerates omitted TXT metadata but rejects another robot")
+    func soleVideoRouteTrustBoundary() throws {
+        let robotID = try #require(
+            UUID(uuidString: "00112233-4455-6677-8899-aabbccddeeff")
+        )
+        #expect(
+            ROBVideoDiscovery.canAuthenticateSoleRoute(
+                advertisedRobotID: nil,
+                expectedRobotID: robotID
+            )
+        )
+        #expect(
+            ROBVideoDiscovery.canAuthenticateSoleRoute(
+                advertisedRobotID: robotID.uuidString,
+                expectedRobotID: robotID
+            )
+        )
+        #expect(
+            !ROBVideoDiscovery.canAuthenticateSoleRoute(
+                advertisedRobotID: "ffffffff-ffff-ffff-ffff-ffffffffffff",
+                expectedRobotID: robotID
+            )
+        )
+        #expect(
+            !ROBVideoDiscovery.canAuthenticateSoleRoute(
+                advertisedRobotID: "not-a-uuid",
+                expectedRobotID: robotID
+            )
+        )
+    }
+
     @Test("Legacy and current Cerebro credentials decode through the same model")
     func credentialCompatibility() throws {
         let base: [String: Any] = [

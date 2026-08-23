@@ -11,7 +11,9 @@
 - Physical game-controller input through GameController. Hold **A** or the right trigger while using the left thumbstick.
 - Press-and-hold spatial controls for operation without a gamepad.
 - A latched software emergency stop and explicit reset/disarm flow.
-- Demand-driven Cerebro H.264 streaming plus a complete synthetic H.264 path for offline testing.
+- Independently switchable main, belly, and Insta360 Pro H.264 feeds, including
+  a separate 2:1 panorama window and a live RealityKit immersive sphere for the
+  stitched 360° stream, plus a synthetic H.264 path for offline testing.
 - Supervised `rob-arm-control/2` Amber arm control with measured seven-joint feedback, independent time-limited Cerebro authority for each arm, independent on-screen joint controls, simultaneous paired PSVR Sense thumbstick jogging, measured completion, and priority hold commands. Arm activation and actuator-mode changes remain outside the Vision app.
 - A default-off, authenticated action-approval console for reviewing bounded Cerebro proposals, explicitly approving or rejecting them, cancelling active work, and observing Cerebro-owned measured completion for approved Amber gestures.
 
@@ -31,10 +33,11 @@ Pair and connect as follows:
 3. On Vision Pro, choose **Cerebro**, select **Pair Cerebro**, and paste the complete `ROBCTL2:...` enrollment code.
 4. Select **Install pairing code**. The credential and Cerebro certificate pin are stored in this Vision Pro's Keychain. The pairing status reads **Credential installed** at this point; installation alone has not authenticated Cerebro.
 5. Accept the visionOS Local Network permission prompt, then select **Connect Cerebro**.
-6. After the control connection authenticates, the pairing status reads **Connected and verified**. If Cerebro's video service also authenticated and advertised a camera, select **Subscribe** in the Robot Camera panel. The app requests the `front` camera as H.264 at up to 960 x 540, 20 fps, and 1.5 Mbit/s using `reliableStream` delivery.
-7. Select **Enable Drive Control**, then hold a directional control or use a game controller while holding its dead-man control. Release it to stop.
-8. Open **Amber Arm Control**, initialize each arm you intend to use from fresh measured feedback, and request **Enable Arm Control** separately for the left and right arms. Cerebro grants independent authorities and measured baselines, so either or both on-screen joint controls can run. With both authorities active, two connected PSVR Sense controllers can jog the matching selected joints simultaneously while both grip buttons are held.
-9. For Cerebro/Gemini action proposals, explicitly enable **Cerebro Action Approval**. Inspect each immutable, expiring proposal and choose **Approve** or **Reject**. Gesture approval authorizes one named catalog gesture; it never accepts model-supplied joint values.
+6. After the control connection authenticates, the pairing status reads **Connected and verified**. In **Pilot Camera Matrix**, enable any combination of **Main Camera**, **Belly Camera**, and **Insta360 Pro**. Each feed can be disabled independently for testing. Main and belly request up to 960 x 540; the stitched Insta360 panorama requests 960 x 480 to preserve its 2:1 equirectangular projection. All use H.264 at up to 20 fps and 1.5 Mbit/s with `reliableStream` delivery.
+7. For Insta360, choose **360 Window** for the ordinary panorama or **Immersive** to texture the live panorama onto the inside of a RealityKit sphere. **Flat Window** inside immersive mode switches back without restarting the subscription.
+8. Select **Enable Drive Control**, then hold a directional control or use a game controller while holding its dead-man control. Release it to stop.
+9. Open **Amber Arm Control**, initialize each arm you intend to use from fresh measured feedback, and request **Enable Arm Control** separately for the left and right arms. Cerebro grants independent authorities and measured baselines, so either or both on-screen joint controls can run. With both authorities active, two connected PSVR Sense controllers can jog the matching selected joints simultaneously while both grip buttons are held.
+10. For Cerebro/Gemini action proposals, explicitly enable **Cerebro Action Approval**. Inspect each immutable, expiring proposal and choose **Approve** or **Reject**. Gesture approval authorizes one named catalog gesture; it never accepts model-supplied joint values.
 
 Each physical controller must have its own Cerebro-issued credential. Do not reuse the iPhone ROBController code or copy its Keychain item to Vision Pro. Reusing a code clones the controller identity, prevents independent revocation, and can cause Cerebro's duplicate-session protection to reject one of the devices.
 
@@ -186,9 +189,9 @@ dns-sd -B _robvideo._udp local.
 
 Cerebro should report its control service as ready using `robctl/2` and, when camera viewing is available, its video service using `robvideo/1`. If neither service appears, verify that both devices are on the same LAN, Local Network access is allowed for ROBControllerVision, Cerebro is running, and the host firewall permits the services.
 
-The Cerebro endpoint treats video as optional for safety. If `_robctl._udp` authenticates but video discovery or authentication fails, **Connect Cerebro** still succeeds with no advertised cameras and control remains available. The current session does not hot-add a later video service; after `_robvideo._udp` becomes healthy, disconnect and reconnect to refresh the one-time camera capabilities.
+The Cerebro endpoint treats video as optional for safety. If `_robctl._udp` authenticates but video discovery or authentication fails, **Connect Cerebro** still succeeds with no advertised cameras and control remains available. The app retries `_robvideo._udp` independently and hot-adds its authenticated camera capabilities without disconnecting control.
 
-If control connects but the camera is absent or **Subscribe** remains unavailable, verify `_robvideo._udp`, its authentication, and Cerebro's selected camera. An unavailable video service or camera produces a control handshake with no cameras, so reconnect after correcting the video state.
+If control connects but the camera is absent or **Subscribe** remains unavailable, verify `_robvideo._udp`, its authentication, and Cerebro's selected camera. Leave control connected while correcting the video state; the camera panel shows a waiting indicator and enables **Subscribe** after media recovery.
 
 If pinned TLS or reciprocal authentication fails immediately after the Cerebro canonical-certificate migration, revoke the stale Cerebro device entry and install a newly issued code. If video reports an authorization or stale-session failure, disconnect both connections and reconnect control before subscribing; never substitute a locally generated session UUID.
 

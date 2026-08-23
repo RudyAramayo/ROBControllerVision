@@ -68,6 +68,8 @@ final class RobotViewModel {
     let gameController: GameControllerInput
     let headOrientation: HeadOrientationInput
     let videoPipeline: VideoPipelineCoordinator
+    let bellyVideoPipeline: VideoPipelineCoordinator
+    let insta360VideoPipeline: VideoPipelineCoordinator
     let speechInput: VisionSpeechInput
 
     @ObservationIgnored private let session: RobotSession
@@ -79,8 +81,8 @@ final class RobotViewModel {
     @ObservationIgnored private var videoActionTask: Task<Void, Never>?
     @ObservationIgnored private var videoActionID: UUID?
     @ObservationIgnored private var virtualInputTask: Task<Void, Never>?
-    @ObservationIgnored private var videoLifecycleTask: Task<Void, Never>?
-    @ObservationIgnored private var activeVideoDescriptor: VideoStreamDescriptor?
+    @ObservationIgnored private var videoLifecycleTasks: [CameraID: Task<Void, Never>] = [:]
+    @ObservationIgnored private var activeVideoDescriptors: [CameraID: VideoStreamDescriptor] = [:]
     @ObservationIgnored private var sceneIsActive = false
     @ObservationIgnored private var inputSequence: UInt64 = 0
     @ObservationIgnored private var latestGameControllerSample = GameControllerSample.disconnected
@@ -175,6 +177,8 @@ final class RobotViewModel {
             simulator
             ?? SimulatedRobotEndpoint(videoDataSource: SyntheticVideoDataSource())
         self.videoPipeline = videoPipeline
+        self.bellyVideoPipeline = VideoPipelineCoordinator()
+        self.insta360VideoPipeline = VideoPipelineCoordinator()
         self.speechInput = VisionSpeechInput()
         self.pairingStore = pairingStore
         self.gameController = GameControllerInput()
@@ -200,7 +204,7 @@ final class RobotViewModel {
         actionTask?.cancel()
         videoActionTask?.cancel()
         virtualInputTask?.cancel()
-        videoLifecycleTask?.cancel()
+        for task in videoLifecycleTasks.values { task.cancel() }
         for task in armMotionTasks.values {
             task.cancel()
         }
@@ -1268,18 +1272,38 @@ final class RobotViewModel {
         sendOperatorText()
     }
 
+    func videoPipeline(for cameraID: CameraID) -> VideoPipelineCoordinator {
+        switch cameraID.rawValue {
+        case "belly": bellyVideoPipeline
+        case "insta360": insta360VideoPipeline
+        default: videoPipeline
+        }
+    }
+
+    func activeVideoStream(for cameraID: CameraID) -> VideoStreamDescriptor? {
+        snapshot.videoStreams.first { $0.cameraID == cameraID }
+    }
+
     func toggleVideoSubscription() {
+        guard let camera = snapshot.connection.handshake?.capabilities.cameras.first else {
+            statusMessage = "The connected robot did not advertise a camera"
+            return
+        }
+        toggleVideoSubscription(cameraID: camera.id)
+    }
+
+    func toggleVideoSubscription(cameraID: CameraID) {
         guard videoActionTask == nil else { return }
         let session = session
         let id = UUID()
         videoActionID = id
         videoActionIsPending = true
-        if let activeStream = snapshot.videoStreams.first {
+        if let activeStream = activeVideoStream(for: cameraID) {
             videoActionTask = Task { [weak self] in
                 do {
                     try await session.unsubscribeVideo(activeStream.id)
                     if !Task.isCancelled {
-                        self?.statusMessage = "Video subscription stopped"
+                        self?.statusMessage = "\(cameraID.rawValue) video disabled"
                     }
                 } catch {
                     if !Task.isCancelled {
@@ -1291,8 +1315,10 @@ final class RobotViewModel {
             return
         }
 
-        guard let camera = snapshot.connection.handshake?.capabilities.cameras.first else {
-            statusMessage = "The connected robot did not advertise a camera"
+        guard let camera = snapshot.connection.handshake?.capabilities.cameras.first(
+            where: { $0.id == cameraID }
+        ) else {
+            statusMessage = "That camera is not currently advertised by Cerebro"
             finishVideoAction(id)
             return
         }
@@ -1301,13 +1327,13 @@ final class RobotViewModel {
             snapshot.connection.endpoint?.transport == .simulated
             ? .quicDatagrams
             : .reliableStream
-        let request = Self.videoRequest(cameraID: camera.id, delivery: delivery)
+        let request = Self.videoRequest(camera: camera, delivery: delivery)
         videoActionTask = Task { [weak self] in
             do {
                 let response = try await session.subscribeVideo(request)
                 switch response {
                 case .accepted:
-                    self?.statusMessage = "Video subscription negotiated"
+                    self?.statusMessage = "\(camera.name) video enabled"
                 case .rejected(_, let reason):
                     self?.statusMessage = "Video subscription rejected: \(reason.rawValue)"
                 }
@@ -1321,16 +1347,16 @@ final class RobotViewModel {
     }
 
     private static func videoRequest(
-        cameraID: CameraID,
+        camera: CameraDescriptor,
         delivery: VideoDeliveryMode
     ) -> VideoSubscriptionRequest {
         VideoSubscriptionRequest(
-            cameraID: cameraID,
+            cameraID: camera.id,
             preferredCodecs: [.h264],
             constraints: VideoConstraints(
-                maximumWidth: 960,
-                maximumHeight: 540,
-                maximumFramesPerSecond: 20,
+                maximumWidth: min(960, camera.maximumWidth),
+                maximumHeight: min(540, camera.maximumHeight),
+                maximumFramesPerSecond: min(20, camera.maximumFramesPerSecond),
                 maximumBitrate: 1_500_000
             ),
             delivery: delivery
@@ -1347,14 +1373,14 @@ final class RobotViewModel {
             actionTask = Task { [weak self] in
                 await session.connect(using: simulator)
                 let snapshot = await session.currentSnapshot()
-                guard let cameraID = snapshot.connection.handshake?.capabilities.cameras.first?.id else {
+                guard let camera = snapshot.connection.handshake?.capabilities.cameras.first else {
                     self?.statusMessage = "Video smoke test found no camera"
                     self?.finishAction(id)
                     return
                 }
                 do {
                     _ = try await session.subscribeVideo(
-                        Self.videoRequest(cameraID: cameraID, delivery: .quicDatagrams)
+                        Self.videoRequest(camera: camera, delivery: .quicDatagrams)
                     )
                 } catch {
                     self?.statusMessage = "Video smoke test failed: \(error.localizedDescription)"
@@ -1409,7 +1435,7 @@ final class RobotViewModel {
 
     func setSceneActive(_ active: Bool) {
         sceneIsActive = active
-        let activeVideoID = snapshot.videoStreams.first?.id
+        let activeVideoIDs = snapshot.videoStreams.map(\.id)
         if !active {
             clearPairingCodeDraft()
             cancelVideoAction()
@@ -1425,8 +1451,10 @@ final class RobotViewModel {
         let session = session
         Task {
             await session.setSceneActive(active)
-            if !active, let activeVideoID {
-                try? await session.unsubscribeVideo(activeVideoID)
+            if !active {
+                for activeVideoID in activeVideoIDs {
+                    try? await session.unsubscribeVideo(activeVideoID)
+                }
             }
         }
     }
@@ -1819,42 +1847,55 @@ final class RobotViewModel {
     }
 
     private func synchronizeVideoPipeline(from snapshot: RobotSessionSnapshot) {
-        let desiredDescriptor =
-            sceneIsActive && snapshot.connection.isReady
-            ? snapshot.videoStreams.first
-            : nil
-        guard desiredDescriptor != activeVideoDescriptor else { return }
-
-        activeVideoDescriptor = desiredDescriptor
-        videoLifecycleTask?.cancel()
-        let videoPipeline = videoPipeline
-        let session = session
-        if let desiredDescriptor,
-            let sessionID = snapshot.connection.handshake?.sessionID
-        {
-            videoLifecycleTask = Task {
-                guard !Task.isCancelled else { return }
-                await videoPipeline.start(
-                    stream: desiredDescriptor,
-                    sessionID: sessionID,
-                    session: session
-                )
-            }
-        } else {
-            videoLifecycleTask = Task {
-                guard !Task.isCancelled else { return }
-                await videoPipeline.stop()
+        let desiredDescriptors = Dictionary(
+            uniqueKeysWithValues: (
+                sceneIsActive && snapshot.connection.isReady
+                ? snapshot.videoStreams
+                : []
+            ).map { ($0.cameraID, $0) }
+        )
+        let cameraIDs = Set(activeVideoDescriptors.keys).union(desiredDescriptors.keys)
+        for cameraID in cameraIDs {
+            let desiredDescriptor = desiredDescriptors[cameraID]
+            guard desiredDescriptor != activeVideoDescriptors[cameraID] else { continue }
+            activeVideoDescriptors[cameraID] = desiredDescriptor
+            videoLifecycleTasks.removeValue(forKey: cameraID)?.cancel()
+            let pipeline = videoPipeline(for: cameraID)
+            let session = session
+            if let desiredDescriptor,
+               let sessionID = snapshot.connection.handshake?.sessionID {
+                videoLifecycleTasks[cameraID] = Task {
+                    guard !Task.isCancelled else { return }
+                    await pipeline.start(
+                        stream: desiredDescriptor,
+                        sessionID: sessionID,
+                        session: session
+                    )
+                }
+            } else {
+                activeVideoDescriptors.removeValue(forKey: cameraID)
+                videoLifecycleTasks[cameraID] = Task {
+                    guard !Task.isCancelled else { return }
+                    await pipeline.stop()
+                }
             }
         }
     }
 
     private func stopVideoPipeline() {
-        activeVideoDescriptor = nil
-        videoLifecycleTask?.cancel()
-        let videoPipeline = videoPipeline
-        videoLifecycleTask = Task {
-            guard !Task.isCancelled else { return }
-            await videoPipeline.stop()
+        activeVideoDescriptors.removeAll()
+        for task in videoLifecycleTasks.values { task.cancel() }
+        videoLifecycleTasks.removeAll()
+        let pipelines: [(CameraID, VideoPipelineCoordinator)] = [
+            (CameraID(rawValue: "front"), videoPipeline),
+            (CameraID(rawValue: "belly"), bellyVideoPipeline),
+            (CameraID(rawValue: "insta360"), insta360VideoPipeline),
+        ]
+        for (cameraID, pipeline) in pipelines {
+            videoLifecycleTasks[cameraID] = Task {
+                guard !Task.isCancelled else { return }
+                await pipeline.stop()
+            }
         }
     }
 

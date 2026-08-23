@@ -74,6 +74,9 @@ enum ROBVideoMessageType: UInt16, Sendable {
     case codecConfiguration = 10
     case accessUnit = 11
     case streamEnded = 12
+    /// Client-first stream opener. Its appended value preserves the existing
+    /// robvideo/1 wire values while preventing a server-initiated QUIC stream.
+    case authenticationHello = 13
 
     var isMedia: Bool {
         self == .codecConfiguration || self == .accessUnit

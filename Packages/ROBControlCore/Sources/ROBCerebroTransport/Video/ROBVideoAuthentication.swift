@@ -2,6 +2,41 @@ import CryptoKit
 import Foundation
 import Security
 
+enum ROBVideoAuthenticationRejectionCode: UInt8, Sendable {
+    case proofRejected = 1
+    case notAuthorized = 2
+    case capacityReached = 3
+    case invalidMessage = 4
+
+    static func transportError(from data: Data) -> ROBCerebroTransportError {
+        guard data.count == 1, let code = Self(rawValue: data[0]) else {
+            return .invalidWireMessage
+        }
+        switch code {
+        case .proofRejected:
+            return .authenticationFailed
+        case .notAuthorized:
+            return .authorizationFailed
+        case .capacityReached:
+            return .videoCapacityReached
+        case .invalidMessage:
+            return .invalidWireMessage
+        }
+    }
+}
+
+struct ROBVideoAuthenticationHello: Sendable {
+    static let encodedSize = 17
+
+    let controllerID: UUID
+
+    var encoded: Data {
+        var data = Data([ROBCerebroVideoProtocol.protocolVersion])
+        data.append(controllerID.robVideoBytes)
+        return data
+    }
+}
+
 struct ROBVideoAuthenticationChallenge: Sendable {
     static let encodedSize = 65
 

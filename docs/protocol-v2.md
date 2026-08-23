@@ -99,7 +99,7 @@ Production video negotiation does **not** use the `_robctl._udp` connection. The
 
 The request ID correlates the asynchronous response. `RobotSession` applies a bounded negotiation timeout, rejects duplicate active or pending IDs, and does not report success until it receives the matching response. A cancelled or timed-out request is abandoned so a late acceptance is immediately unsubscribed.
 
-Cerebro currently advertises camera `front`, H.264, and `reliableStream`. ROBControllerVision requests up to 960 x 540, 20 fps, and 1,500,000 bit/s; the accepted `VideoStreamDescriptor` is authoritative because the server may clamp the request. QUIC datagram, HEVC, and JPEG requests are rejected for this production profile.
+Cerebro advertises `front`, `belly`, and `insta360` with H.264 `reliableStream` delivery. ROBControllerVision requests up to 960 x 540 for main/belly and 960 x 480 for the 2:1 equirectangular panorama, at 20 fps and 1,500,000 bit/s. Each enabled camera uses an independently authenticated media connection; the accepted `VideoStreamDescriptor` is authoritative because the server may clamp the request. QUIC datagram, HEVC, and JPEG requests are rejected for this production profile.
 
 ## Encoded video data
 
@@ -128,7 +128,7 @@ Current hard limits include:
 
 The video subscription is valid only while its exact control session remains live for the same authenticated `operatorController`. A stale or locally generated UUID, `lidarPublisher` credential, revoked credential, mismatched stream ID, unsupported profile, malformed payload, or replaced control session fails closed.
 
-Scene suspension, disconnect, unsubscribe, stream-ended notification, or fatal receiver validation closes the uniquely owned media channel. Control disconnect tears down video. Video discovery/authentication failure produces a ready control handshake with no cameras, and runtime video loss ends its streams without closing, arming, resetting, or otherwise altering control. Capabilities are not hot-refreshed; restore video and reconnect the Cerebro endpoint to advertise cameras in a new handshake.
+Scene suspension, disconnect, unsubscribe, stream-ended notification, or fatal receiver validation closes the uniquely owned media channel. Control disconnect tears down video. Video discovery/authentication failure produces a ready control handshake with no cameras, and runtime video loss ends its streams without closing, arming, resetting, or otherwise altering control. While control remains live, the adapter retries only the media service and publishes authenticated camera-capability changes into the existing session.
 
 ## Compatibility boundary
 

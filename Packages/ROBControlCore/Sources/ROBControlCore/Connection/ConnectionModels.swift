@@ -61,17 +61,22 @@ public struct RobotCapabilities: Codable, Hashable, Sendable {
     public var supportsEmergencyStop: Bool
     public var supportsArmControlExecution: Bool
     public var cameras: [CameraDescriptor]
+    /// A bounded diagnostic supplied by the transport when camera capability discovery failed.
+    /// `nil` means either video is available or this transport has no additional detail.
+    public var videoUnavailableReason: String?
 
     public init(
         supportsMotionControl: Bool = true,
         supportsEmergencyStop: Bool = true,
         supportsArmControlExecution: Bool = false,
-        cameras: [CameraDescriptor] = []
+        cameras: [CameraDescriptor] = [],
+        videoUnavailableReason: String? = nil
     ) {
         self.supportsMotionControl = supportsMotionControl
         self.supportsEmergencyStop = supportsEmergencyStop
         self.supportsArmControlExecution = supportsArmControlExecution
         self.cameras = cameras
+        self.videoUnavailableReason = videoUnavailableReason
     }
 }
 
@@ -80,7 +85,7 @@ public struct RobotHandshake: Codable, Hashable, Sendable {
     public let sessionID: UUID
     public let robotName: String
     public let connectedAtUnixMilliseconds: Int64
-    public let capabilities: RobotCapabilities
+    public var capabilities: RobotCapabilities
     public let safetyState: MotionSafetyState
 
     public init(

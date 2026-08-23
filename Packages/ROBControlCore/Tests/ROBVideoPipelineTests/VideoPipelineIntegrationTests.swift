@@ -257,6 +257,65 @@ struct VideoPipelineIntegrationTests {
         await source.closeVideoDataChannel(replacement.id)
     }
 
+    @Test("Main, belly, and 360 subscriptions remain independently active")
+    func threeCameraSubscriptionsCoexist() async throws {
+        let cameras = [
+            CameraDescriptor(
+                id: CameraID(rawValue: "front"),
+                name: "Main Camera",
+                supportedCodecs: [.h264],
+                maximumWidth: 960,
+                maximumHeight: 540,
+                maximumFramesPerSecond: 20
+            ),
+            CameraDescriptor(
+                id: CameraID(rawValue: "belly"),
+                name: "Belly Camera",
+                supportedCodecs: [.h264],
+                maximumWidth: 960,
+                maximumHeight: 540,
+                maximumFramesPerSecond: 20
+            ),
+            CameraDescriptor(
+                id: CameraID(rawValue: "insta360"),
+                name: "Insta360 Pro",
+                supportedCodecs: [.h264],
+                maximumWidth: 960,
+                maximumHeight: 480,
+                maximumFramesPerSecond: 20
+            ),
+        ]
+        let endpoint = SimulatedRobotEndpoint(
+            configuration: .init(connectDelay: .zero, cameras: cameras),
+            videoDataSource: SyntheticVideoDataSource()
+        )
+        let session = RobotSession()
+        await session.connect(using: endpoint)
+
+        var ids: [VideoSubscriptionID] = []
+        for camera in cameras {
+            let response = try await session.subscribeVideo(
+                VideoSubscriptionRequest(
+                    cameraID: camera.id,
+                    preferredCodecs: [.h264]
+                )
+            )
+            guard case .accepted(let stream) = response else {
+                Issue.record("Expected \(camera.name) to negotiate")
+                continue
+            }
+            ids.append(stream.id)
+        }
+
+        let snapshot = await session.currentSnapshot()
+        #expect(Set(snapshot.videoStreams.map(\.cameraID)) == Set(cameras.map(\.id)))
+        for id in ids { try await session.unsubscribeVideo(id) }
+        try await ContinuousClock().sleep(for: .milliseconds(20))
+        let ended = await session.currentSnapshot()
+        #expect(ended.videoStreams.isEmpty)
+        await session.disconnect()
+    }
+
     @Test("Duplicate active subscription IDs are rejected without replacing control state")
     func duplicateSubscriptionIDsAreRejected() async throws {
         let endpoint = SimulatedRobotEndpoint(

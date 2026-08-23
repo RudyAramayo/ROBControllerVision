@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreVideo
 import Foundation
 import Observation
 import ROBControlCore
@@ -37,6 +38,12 @@ final class VideoPipelineCoordinator {
         let displayLayer = AVSampleBufferDisplayLayer()
         displayLayer.videoGravity = .resizeAspect
         self.displayLayer = displayLayer
+    }
+
+    /// Supplies the already-decoded frame to RealityKit's live sphere without
+    /// running a second H.264 decoder.
+    func displayedPixelBuffer() -> CVPixelBuffer? {
+        displayLayer.sampleBufferRenderer.displayedPixelBuffer()
     }
 
     deinit {

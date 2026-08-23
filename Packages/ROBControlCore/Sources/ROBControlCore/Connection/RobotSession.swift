@@ -731,7 +731,9 @@ public actor RobotSession {
                 videoTimeoutTasks[request.id]?.cancel()
                 videoTimeoutTasks[request.id] = Task { [weak self] in
                     do {
-                        try await ContinuousClock().sleep(for: .seconds(2))
+                        // A second or third Cerebro stream authenticates an
+                        // isolated QUIC media connection before subscribing.
+                        try await ContinuousClock().sleep(for: .seconds(12))
                     } catch {
                         return
                     }
@@ -1057,6 +1059,11 @@ public actor RobotSession {
         switch event {
         case .connected:
             break
+
+        case .capabilitiesChanged(let capabilities):
+            guard snapshot.connection.isReady else { return }
+            snapshot.connection.handshake?.capabilities = capabilities
+            publish()
 
         case .disconnected(let reason):
             fail(

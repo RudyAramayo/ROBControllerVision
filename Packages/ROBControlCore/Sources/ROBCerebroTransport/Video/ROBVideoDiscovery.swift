@@ -89,11 +89,27 @@ public actor ROBVideoDiscovery {
 
         browser.browseResultsChangedHandler = { [weak self, weak browser] results, _ in
             guard let browser else { return }
-            let selected =
-                results
+            let exactMatches = results
                 .filter { Self.matches($0, credential: credential) }
                 .sorted { $0.endpoint.debugDescription < $1.endpoint.debugDescription }
-                .first
+            let selected: NWBrowser.Result?
+            if let exactMatch = exactMatches.first {
+                selected = exactMatch
+            } else if results.count == 1,
+                      let soleResult = results.first,
+                      Self.canAuthenticateSoleRoute(
+                          soleResult,
+                          credential: credential
+                      ) {
+                // visionOS can omit some or all Bonjour TXT metadata even
+                // though it resolves the service endpoint. The TXT fields are
+                // only routing hints: the connection still fails closed on
+                // the enrolled TLS leaf and the pairing-secret HMAC before it
+                // accepts Cerebro's camera capabilities.
+                selected = soleResult
+            } else {
+                selected = nil
+            }
             guard let selected else { return }
 
             let serviceName: String
@@ -137,6 +153,28 @@ public actor ROBVideoDiscovery {
             && txtRecord["alpn"] == ROBCerebroVideoProtocol.applicationProtocol
             && txtRecord["codec"] == "h264"
             && txtRecord["delivery"] == "reliableStream"
+    }
+
+    private nonisolated static func canAuthenticateSoleRoute(
+        _ result: NWBrowser.Result,
+        credential: ROBCerebroCredential
+    ) -> Bool {
+        guard case .bonjour(let txtRecord) = result.metadata,
+              let advertisedRobotID = txtRecord["robot_id"] else {
+            return true
+        }
+        return canAuthenticateSoleRoute(
+            advertisedRobotID: advertisedRobotID,
+            expectedRobotID: credential.robotID
+        )
+    }
+
+    nonisolated static func canAuthenticateSoleRoute(
+        advertisedRobotID: String?,
+        expectedRobotID: UUID
+    ) -> Bool {
+        guard let advertisedRobotID else { return true }
+        return UUID(uuidString: advertisedRobotID) == expectedRobotID
     }
 
     private func found(_ endpoint: ROBVideoDiscoveredEndpoint, browser: NWBrowser) {

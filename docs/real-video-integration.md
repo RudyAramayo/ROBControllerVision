@@ -21,9 +21,9 @@ Video is not tunneled through the robot-control connection. Capabilities, subscr
 4. In ROBControllerVision, select **Pair Cerebro**, paste the complete `ROBCTL2:...` code, and select **Install pairing code**. The UI now says **Credential installed**; this confirms Keychain persistence, not network authentication.
 5. Allow Local Network access when visionOS asks. Keep the Vision Pro and Cerebro Mac on the same LAN.
 6. Choose the **Cerebro** endpoint and select **Connect Cerebro**.
-7. After control authentication, the pairing UI says **Connected and verified**. If the handshake contains a camera, select **Subscribe** in the Robot Camera panel. If it contains none, repair the optional video service and reconnect to refresh capabilities.
+7. After control authentication, the pairing UI says **Connected and verified**. In **Pilot Camera Matrix**, independently enable main, belly, and Insta360 feeds as needed. If they are initially absent, repair the optional video service while leaving control connected; media discovery retries automatically.
 
-The app discovers only the `robot_id` named by the installed credential, verifies the pinned certificate, completes reciprocal control authentication, and retains Cerebro's exact live control-session UUID. It then makes a bounded attempt to authenticate the separate video service and receive its one-time camera capabilities. Video failure produces an otherwise ready control handshake with no cameras. When video succeeds, an H.264 `reliableStream` subscription carries the exact control UUID.
+The app discovers only the `robot_id` named by the installed credential, verifies the pinned certificate, completes reciprocal control authentication, and retains Cerebro's exact live control-session UUID. It then makes a bounded attempt to authenticate the separate video service. The controller sends the video authentication hello first, opening the client-initiated bidirectional QUIC stream before Cerebro sends its challenge; all authentication, negotiation, and media messages stay on that stream. Video failure produces an otherwise ready control handshake with no cameras, followed by independent media retries. A later authenticated service updates camera capabilities in place. An H.264 `reliableStream` subscription always carries the exact live control UUID.
 
 ### Canonical-certificate migration
 
@@ -49,14 +49,14 @@ The adapter must never generate a separate UUID for the production handshake or 
 | --- | --- |
 | `ROBCerebroPairingStore` | Decode an operator `ROBCTL2:` code and keep one device-only Keychain profile. |
 | Control discovery/client | Browse `_robctl._udp`, filter `robot_id`/version/ALPN, pin TLS, complete `robctl/2` proof, and expose Cerebro's session UUID. |
-| `CerebroRobotTransport` | Present one `RobotTransport`/`RobotVideoDataTransport` boundary, route operations to the correct physical connection, and translate the established controller application payload privately. |
-| `ROBVideoDiscovery` / `ROBVideoClient` | Browse `_robvideo._udp`; match the same robot plus `ver=1`, `alpn=robvideo/1`, `codec=h264`, and `delivery=reliableStream`; pin the same leaf; complete the video proof; receive capabilities; and exchange subscription control plus media. |
+| `CerebroRobotTransport` | Present one `RobotTransport`/`RobotVideoDataTransport` boundary, route each camera subscription to its isolated media connection, and translate the established controller application payload privately. |
+| `ROBVideoDiscovery` / `ROBVideoClient` | Browse `_robvideo._udp`; match the same robot plus `ver=1`, `alpn=robvideo/1`, `codec=h264`, and `delivery=reliableStream`; pin the same leaf; complete the video proof on as many as three camera connections; receive capabilities; and exchange subscription control plus media. |
 | `ROBVideoBinaryDecoder` | Validate `RVID`/`RBVD` bounds and convert complete configuration/access-unit messages into `VideoDataMessage`. |
 | `VideoStreamValidator` | Enforce session, stream, codec, generation, ordering, dimensions, and AVCC invariants. |
 | `H264VideoReceiver` | Create sample buffers and drive `AVSampleBufferVideoRenderer`. |
 | `SyntheticPixelBufferSource` | Remain available only for the selected Simulator endpoint and deterministic tests. |
 
-The production request asks for camera `front`, H.264, a maximum 960 x 540 frame, 20 fps, 1,500,000 bit/s, and `reliableStream`. The accepted descriptor is authoritative because Cerebro may clamp the request.
+Production camera IDs are `front`, `belly`, and `insta360`. Main and belly request at most 960 x 540; Insta360 requests 960 x 480 so its stitched equirectangular panorama remains 2:1. Every feed uses H.264, 20 fps, at most 1,500,000 bit/s, and `reliableStream`. The accepted descriptor is authoritative because Cerebro may clamp the request.
 
 ## Wire framing and receiver contract
 
@@ -81,7 +81,7 @@ Codec configuration must precede the first IDR for a generation. After a sequenc
 - ROBControllerVision opens the media channel only for the accepted stream and gives every open a unique ownership token.
 - Scene suspension, explicit unsubscribe, disconnect, credential revocation, control-session replacement, stream-ended notification, or a fatal media validation error tears down the receiver.
 - Video discovery/authentication failure is nonfatal to control. Runtime video loss ends active streams but leaves `_robctl._udp` authenticated and motion safety operational.
-- Camera capabilities are captured once while connecting. Video is not hot-reconnected in the current session; disconnect and reconnect after restoring `_robvideo._udp` or the camera.
+- Video discovery and authentication retry independently while control remains live. A recovered service updates camera capabilities without replacing the control session.
 - Cleanup is identity-checked so delayed work from an old connection cannot close a replacement stream.
 - Media never enters `RobotEvent` or the snapshot update stream at frame rate; only throttled receiver statistics reach SwiftUI.
 - Normal media pressure drops frames and requests recovery instead of blocking the independent control path.
@@ -101,14 +101,14 @@ Expected Cerebro readiness messages identify `_robctl._udp` with QUIC/TLS and `_
 | --- | --- |
 | Neither service is discovered | Same LAN, visionOS Local Network permission, Cerebro running, multicast/Bonjour availability, and host firewall. |
 | Control discovery times out | The installed code's `robot_id` must match the service TXT record with `ver=2` and `alpn=robctl/2`. |
-| `_robctl._udp` appears but `_robvideo._udp` does not | Control can still connect. The handshake has no cameras, so repair the optional video service and reconnect before subscribing. |
+| `_robctl._udp` appears but `_robvideo._udp` does not | Control can still connect. Repair the optional video service and leave control connected while media discovery retries. |
 | `_robvideo._udp` is visible to `dns-sd`, but the app ignores it | Its TXT record must match the paired `robot_id` and advertise `ver=1`, `alpn=robvideo/1`, `codec=h264`, and `delivery=reliableStream`. |
 | TLS or reciprocal proof fails after the Cerebro upgrade | Revoke the stale entry and install a code issued after canonical-certificate migration. Do not accept a mismatched pin. |
 | One controller connects and the other is rejected | Confirm that Vision Pro and ROBController have different Cerebro-issued controller UUIDs and secrets. |
-| Control connects but no camera is advertised | Verify `_robvideo._udp`, its certificate/proof, Cerebro's camera permission, selected input, and camera state; then reconnect so the one-time capabilities are refreshed. |
+| Control connects but no camera is advertised | Verify `_robvideo._udp`, its certificate/proof, Cerebro's camera permission, selected input, and camera state; the panel enables subscription after automatic media recovery. |
 | Subscription is rejected as unauthorized or stale | Disconnect and reconnect control before subscribing; confirm the adapter uses Cerebro's current session UUID. |
 | Subscription is rejected for delivery or codec | Use H.264 `reliableStream`; Cerebro does not advertise QUIC datagrams, HEVC, or JPEG in this profile. |
-| Video starts and then goes black | Inspect the pipeline status and drop counters; a sequence gap should trigger an IDR request. A terminal video failure ends the stream but leaves control connected; restore the service and reconnect the endpoint to obtain cameras again. |
+| Video starts and then goes black | Inspect the pipeline status and drop counters; a sequence gap should trigger an IDR request. A terminal video failure ends the stream but leaves control connected and restarts media discovery. |
 
 ## Safety ordering
 
@@ -117,7 +117,8 @@ Real video must not weaken the control safety contract. Motion retains its short
 ## Initial limitations
 
 - H.264 ordered reliable streaming only; no HEVC, JPEG-frame, or QUIC-datagram delivery.
-- One monoscopic camera; no depth, stereo, spatial-video, or audio track.
+- Three monoscopic color feeds; no depth, stereo, spatial-video, or audio track.
 - Live viewing only; no recording or replay.
-- Cerebro currently permits at most two authenticated video controllers and one stream per connection.
+- One authenticated media connection per enabled feed, with at most three from
+  the same controller. The main, belly, and 360 streams can run concurrently.
 - Reliable video can suffer head-of-line delay after packet loss, but its independent connection prevents that delay from entering robot control.
