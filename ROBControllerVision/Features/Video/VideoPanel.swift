@@ -121,10 +121,12 @@ struct VideoPanel: View {
 struct ActiveVideoView: View {
     let stream: VideoStreamDescriptor
     let pipeline: VideoPipelineCoordinator
+    var verticallyFlipped = false
 
     var body: some View {
         ZStack {
             SampleBufferVideoView(displayLayer: pipeline.displayLayer)
+                .scaleEffect(x: 1, y: verticallyFlipped ? -1 : 1)
                 .clipShape(RoundedRectangle(cornerRadius: 18))
 
             VStack {
@@ -258,7 +260,11 @@ struct Insta360WindowView: View {
             ZStack {
                 RoundedRectangle(cornerRadius: 22).fill(.black)
                 if let stream {
-                    ActiveVideoView(stream: stream, pipeline: model.insta360VideoPipeline)
+                    ActiveVideoView(
+                        stream: stream,
+                        pipeline: model.insta360VideoPipeline,
+                        verticallyFlipped: true
+                    )
                 } else {
                     ContentUnavailableView(
                         "Insta360 stream is disabled",
@@ -342,7 +348,10 @@ private final class Insta360SphereRenderer {
             depth: 1,
             mipmapLevelCount: 1,
             arrayLength: 1,
-            textureUsage: [.shaderRead, .renderTarget]
+            // Core Image may use a compute kernel when rendering into this
+            // texture, which requires shader-write access. Without it the
+            // RealityKit material remains its initial black contents.
+            textureUsage: [.shaderRead, .shaderWrite, .renderTarget]
         )
         let lowLevelTexture = try LowLevelTexture(descriptor: descriptor)
         let texture = try TextureResource(from: lowLevelTexture)
@@ -359,7 +368,10 @@ private final class Insta360SphereRenderer {
         // from the pilot's position at the center.
         sphere.scale = SIMD3<Float>(-1, 1, 1)
         self.lowLevelTexture = lowLevelTexture
-        commandQueue = device.makeCommandQueue()
+        guard let commandQueue = device.makeCommandQueue() else {
+            throw Insta360SphereError.commandQueueUnavailable
+        }
+        self.commandQueue = commandQueue
         ciContext = CIContext(mtlDevice: device)
         return sphere
     }
@@ -386,8 +398,30 @@ private final class Insta360SphereRenderer {
               let ciContext else { return }
         let destination = lowLevelTexture.replace(using: commandBuffer)
         let bounds = CGRect(x: 0, y: 0, width: destination.width, height: destination.height)
+        let source = CIImage(cvPixelBuffer: pixelBuffer)
+        let normalized = source.transformed(
+            by: CGAffineTransform(
+                translationX: -source.extent.minX,
+                y: -source.extent.minY
+            )
+        )
+        // The Insta360 preview arrives vertically inverted in its decoded
+        // video surface. Correct it before RealityKit applies equirectangular
+        // UVs to the inside of the sphere.
+        let upright = normalized.transformed(
+            by: CGAffineTransform(
+                translationX: 0,
+                y: normalized.extent.height
+            ).scaledBy(x: 1, y: -1)
+        )
+        let fitted = upright.transformed(
+            by: CGAffineTransform(
+                scaleX: bounds.width / upright.extent.width,
+                y: bounds.height / upright.extent.height
+            )
+        )
         ciContext.render(
-            CIImage(cvPixelBuffer: pixelBuffer),
+            fitted,
             to: destination,
             commandBuffer: commandBuffer,
             bounds: bounds,
@@ -399,8 +433,14 @@ private final class Insta360SphereRenderer {
 
 private enum Insta360SphereError: LocalizedError {
     case metalUnavailable
+    case commandQueueUnavailable
 
     var errorDescription: String? {
-        "The headset could not create the Metal renderer for the 360° sphere."
+        switch self {
+        case .metalUnavailable:
+            "The headset could not create the Metal renderer for the 360° sphere."
+        case .commandQueueUnavailable:
+            "The headset could not create the Metal command queue for the 360° sphere."
+        }
     }
 }

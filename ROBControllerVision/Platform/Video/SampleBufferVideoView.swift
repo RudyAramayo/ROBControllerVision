@@ -35,8 +35,12 @@ final class SampleBufferVideoHostView: UIView {
     }
 
     func attach(_ displayLayer: AVSampleBufferDisplayLayer) {
-        guard hostedDisplayLayer !== displayLayer else { return }
-        hostedDisplayLayer?.removeFromSuperlayer()
+        guard hostedDisplayLayer !== displayLayer || displayLayer.superlayer !== layer else {
+            return
+        }
+        if hostedDisplayLayer?.superlayer === layer {
+            hostedDisplayLayer?.removeFromSuperlayer()
+        }
         displayLayer.removeFromSuperlayer()
         displayLayer.videoGravity = .resizeAspect
         layer.addSublayer(displayLayer)
@@ -45,7 +49,12 @@ final class SampleBufferVideoHostView: UIView {
     }
 
     func detach() {
-        hostedDisplayLayer?.removeFromSuperlayer()
+        // A display layer is shared by the flat and immersive presentation
+        // targets. A stale window teardown must not detach it after the newer
+        // target has already adopted it.
+        if hostedDisplayLayer?.superlayer === layer {
+            hostedDisplayLayer?.removeFromSuperlayer()
+        }
         hostedDisplayLayer = nil
     }
 
