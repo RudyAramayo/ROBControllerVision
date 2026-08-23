@@ -1,6 +1,14 @@
 import Foundation
 import ROBControlCore
 
+struct ROBLegacyControlAuthorityState: Equatable, Sendable {
+    let activeControllerID: String
+
+    func isOwned(by controllerID: UUID) -> Bool {
+        activeControllerID.caseInsensitiveCompare(controllerID.uuidString) == .orderedSame
+    }
+}
+
 /// Compatibility encoder for Cerebro's established ROBController application payload.
 ///
 /// Transport authentication and framing remain v2 QUIC/TLS. Only the application payload uses
@@ -8,6 +16,26 @@ import ROBControlCore
 /// controller adopt a shared typed control message.
 enum ROBLegacyControllerPayload {
     private static let maximumArchivedBytes = 64 * 1_024
+    private static let authorityStateMarker = "ROBControlAuthorityStateV1"
+
+    static func decodeControlAuthorityState(
+        _ data: Data
+    ) -> ROBLegacyControlAuthorityState? {
+        guard !data.isEmpty, data.count <= maximumArchivedBytes,
+              let envelope = try? NSKeyedUnarchiver.unarchivedObject(
+                ofClasses: [NSDictionary.self, NSString.self],
+                from: data
+              ) as? NSDictionary,
+              envelope["message"] as? String == authorityStateMarker,
+              envelope["control.authority.version"] as? String == "1",
+              let activeControllerID = envelope["control.authority.controller_id"] as? String,
+              !activeControllerID.isEmpty,
+              activeControllerID.count <= 128,
+              activeControllerID.rangeOfCharacter(from: .controlCharacters) == nil else {
+            return nil
+        }
+        return ROBLegacyControlAuthorityState(activeControllerID: activeControllerID)
+    }
 
     static func requestMotionAuthority(senderID: UUID) throws -> Data {
         try archive(message: "RequestToBeMasterController", senderID: senderID)

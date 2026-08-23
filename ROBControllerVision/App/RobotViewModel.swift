@@ -425,18 +425,32 @@ final class RobotViewModel {
     }
 
     func toggleArmed() {
-        let shouldArm = !snapshot.safety.isArmed
-        if shouldArm && hasAnyActiveArmControl {
+        if snapshot.safety.isArmed {
+            releaseControl()
+        } else {
+            requestControl()
+        }
+    }
+
+    func requestControl() {
+        guard !snapshot.safety.isArmed else { return }
+        if hasAnyActiveArmControl {
             statusMessage = "Disable Amber arm control before enabling drive control"
             return
         }
-        if !shouldArm {
-            endVirtualMotion()
-            cancelArmMotionLocally()
-        }
         let session = session
         Task {
-            await session.setArmed(shouldArm)
+            await session.setArmed(true)
+        }
+    }
+
+    func releaseControl() {
+        guard snapshot.safety.isArmed else { return }
+        endVirtualMotion()
+        cancelArmMotionLocally()
+        let session = session
+        Task {
+            await session.setArmed(false)
         }
     }
 

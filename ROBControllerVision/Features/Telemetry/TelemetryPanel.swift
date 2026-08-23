@@ -21,7 +21,10 @@ struct TelemetryPanel: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(18)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 20))
+        .background(
+            RoundedRectangle(cornerRadius: 20)
+                .fill(Material.thin)
+        )
     }
 
     @ViewBuilder

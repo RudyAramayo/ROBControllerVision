@@ -523,6 +523,13 @@ public actor CerebroRobotTransport: RobotTransport, RobotVideoDataTransport {
             publish(.disconnected(reason: error?.localizedDescription ?? "Cerebro disconnected."))
 
         case .applicationData(let data):
+            if let authority = ROBLegacyControllerPayload.decodeControlAuthorityState(data) {
+                publish(.safety(.armedChanged(
+                    authority.isOwned(by: credential.controllerID)
+                )))
+                return
+            }
+
             do {
                 if let message = try RobotArmWireCodec.decode(data) {
                     switch message {

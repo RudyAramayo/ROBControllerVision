@@ -71,7 +71,10 @@ struct ConnectionStatusView: View {
             }
         }
         .padding(18)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 20))
+        .background(
+            RoundedRectangle(cornerRadius: 20)
+                .fill(Material.thin)
+        )
         .sheet(isPresented: $model.showsPairingSheet) {
             CerebroPairingSheet(model: model)
         }

@@ -42,7 +42,10 @@ struct VideoPanel: View {
             }
         }
         .padding(20)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 20))
+        .background(
+            RoundedRectangle(cornerRadius: 20)
+                .fill(Material.thin)
+        )
     }
 
     @ViewBuilder
@@ -108,7 +111,10 @@ struct VideoPanel: View {
             .frame(maxWidth: .infinity, minHeight: camera.id.rawValue == "front" ? 260 : 180)
         }
         .padding(14)
-        .background(.black.opacity(0.18), in: RoundedRectangle(cornerRadius: 18))
+        .background(
+            RoundedRectangle(cornerRadius: 18)
+                .fill(Color.black.opacity(0.18))
+        )
     }
 }
 
@@ -130,7 +136,10 @@ struct ActiveVideoView: View {
             if case .starting = pipeline.state {
                 ProgressView("Starting encoder and decoder…")
                     .padding()
-                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
+                    .background(
+                        RoundedRectangle(cornerRadius: 14)
+                            .fill(Material.ultraThin)
+                    )
             }
         }
     }

@@ -158,6 +158,26 @@ struct ROBLegacyControllerPayloadTests {
         #expect(envelope["sender"] as? String == senderID.uuidString.lowercased())
     }
 
+    @Test("Cerebro authority updates identify the active physical controller")
+    func authorityState() throws {
+        let controllerID = UUID(uuidString: "11111111-2222-3333-4444-555555555555")!
+        let data = try NSKeyedArchiver.archivedData(
+            withRootObject: [
+                "message": "ROBControlAuthorityStateV1",
+                "sender": "Cerebro",
+                "control.authority.version": "1",
+                "control.authority.controller_id": controllerID.uuidString.lowercased(),
+            ],
+            requiringSecureCoding: true
+        )
+        let state = try #require(
+            ROBLegacyControllerPayload.decodeControlAuthorityState(data)
+        )
+        #expect(state.isOwned(by: controllerID))
+        #expect(!state.isOwned(by: UUID()))
+        #expect(ROBLegacyControllerPayload.decodeControlAuthorityState(Data()) == nil)
+    }
+
     @Test("Operator text carries an explicit execution mode")
     func operatorText() throws {
         let senderID = UUID(uuidString: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")!

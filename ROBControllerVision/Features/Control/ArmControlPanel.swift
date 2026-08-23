@@ -80,7 +80,10 @@ struct ArmControlPanel: View {
             .foregroundStyle(.secondary)
         }
         .padding(14)
-        .background(.red.opacity(0.08), in: RoundedRectangle(cornerRadius: 14))
+        .background(
+            RoundedRectangle(cornerRadius: 14)
+                .fill(Color.red.opacity(0.08))
+        )
     }
 
     private var pairedControllerJog: some View {
@@ -117,7 +120,10 @@ struct ArmControlPanel: View {
             .foregroundStyle(.secondary)
         }
         .padding(14)
-        .background(.blue.opacity(0.07), in: RoundedRectangle(cornerRadius: 14))
+        .background(
+            RoundedRectangle(cornerRadius: 14)
+                .fill(Color.blue.opacity(0.07))
+        )
     }
 
     private func armLane(_ arm: RobotArmSide) -> some View {
@@ -145,7 +151,10 @@ struct ArmControlPanel: View {
             feedback(for: arm)
         }
         .padding(16)
-        .background(.secondary.opacity(0.055), in: RoundedRectangle(cornerRadius: 18))
+        .background(
+            RoundedRectangle(cornerRadius: 18)
+                .fill(Color.secondary.opacity(0.055))
+        )
     }
 
     private func preflight(for arm: RobotArmSide) -> some View {
@@ -185,7 +194,10 @@ struct ArmControlPanel: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(10)
-        .background(.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(Color.secondary.opacity(0.08))
+        )
     }
 
     private func jointEditor(for arm: RobotArmSide) -> some View {
@@ -299,7 +311,10 @@ struct ArmControlPanel: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.cyan.opacity(0.07), in: RoundedRectangle(cornerRadius: 12))
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(Color.cyan.opacity(0.07))
+        )
     }
 
     private var gripperControl: some View {
@@ -363,7 +378,10 @@ struct ArmControlPanel: View {
                 .foregroundStyle(.secondary)
         }
         .padding(14)
-        .background(.orange.opacity(0.07), in: RoundedRectangle(cornerRadius: 14))
+        .background(
+            RoundedRectangle(cornerRadius: 14)
+                .fill(Color.orange.opacity(0.07))
+        )
     }
 
     private var priorityHold: some View {

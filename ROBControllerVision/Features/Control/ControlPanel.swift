@@ -68,6 +68,17 @@ struct ControlPanel: View {
                 .font(.caption2)
                 .foregroundStyle(.secondary)
 
+            Label(
+                model.snapshot.safety.isArmed
+                    ? "Vision Pro is the active drive input"
+                    : "Drive input is owned by Cerebro or another controller",
+                systemImage: model.snapshot.safety.isArmed
+                    ? "person.crop.circle.badge.checkmark"
+                    : "person.crop.circle.badge.questionmark"
+            )
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(model.snapshot.safety.isArmed ? .green : .secondary)
+
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
                     Text("Speed limit")
@@ -106,10 +117,18 @@ struct ControlPanel: View {
                 }
             }
 
-            Button(action: model.toggleArmed) {
+            Button {
+                if model.snapshot.safety.isArmed {
+                    model.releaseControl()
+                } else {
+                    model.requestControl()
+                }
+            } label: {
                 Label(
-                    model.snapshot.safety.isArmed ? "Disable Drive Control" : "Enable Drive Control",
-                    systemImage: model.snapshot.safety.isArmed ? "lock.open.fill" : "lock.fill"
+                    model.snapshot.safety.isArmed ? "Release Control" : "Request Control",
+                    systemImage: model.snapshot.safety.isArmed
+                        ? "person.crop.circle.badge.minus"
+                        : "person.crop.circle.badge.plus"
                 )
                 .frame(maxWidth: .infinity)
             }
@@ -119,6 +138,12 @@ struct ControlPanel: View {
                 !model.snapshot.connection.isReady
                     || model.snapshot.safety.emergencyStopIsLatched
             )
+
+            Text(
+                "Request Control safely stops the previous input and transfers drive commands to this Vision Pro. Release Control brakes ROB and returns input ownership to Cerebro."
+            )
+            .font(.caption2)
+            .foregroundStyle(.secondary)
 
             Button {
                 model.showsArmControlSheet = true
@@ -150,7 +175,10 @@ struct ControlPanel: View {
                 .foregroundStyle(.secondary)
         }
         .padding(20)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 20))
+        .background(
+            RoundedRectangle(cornerRadius: 20)
+                .fill(Material.thin)
+        )
         .sheet(isPresented: $model.showsArmControlSheet) {
             ArmControlPanel(model: model)
         }
@@ -245,7 +273,10 @@ private struct RobotActionApprovalView: View {
                     }
                 }
                 .padding(12)
-                .background(.orange.opacity(0.10), in: RoundedRectangle(cornerRadius: 12))
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(Color.orange.opacity(0.10))
+                )
             }
 
             Text("Every proposal is immutable and expires. Named gestures never carry model-supplied joint values, and the physical E-stop remains authoritative.")
@@ -253,7 +284,10 @@ private struct RobotActionApprovalView: View {
                 .foregroundStyle(.secondary)
         }
         .padding(12)
-        .background(.indigo.opacity(0.08), in: RoundedRectangle(cornerRadius: 14))
+        .background(
+            RoundedRectangle(cornerRadius: 14)
+                .fill(Color.indigo.opacity(0.08))
+        )
     }
 
     private var stateLabel: String {
@@ -337,7 +371,10 @@ private struct TreadDemandView: View {
                 .foregroundStyle(value.magnitude > 0.02 ? tint : .secondary)
         }
         .padding(12)
-        .background(.black.opacity(0.18), in: RoundedRectangle(cornerRadius: 12))
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(Color.black.opacity(0.18))
+        )
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(title), \(direction), \(value.formatted(.number.precision(.fractionLength(2))))")
     }
