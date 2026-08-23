@@ -46,8 +46,11 @@ struct OperatorSpeechPanel: View {
 
             HStack(spacing: 10) {
                 speechControl(
-                    model.speechInput.isRecording ? "Stop" : "Dictate",
+                    model.speechInput.isStarting
+                        ? "Starting…"
+                        : model.speechInput.isRecording ? "Stop" : "Dictate",
                     systemImage: model.speechInput.isRecording ? "stop.fill" : "mic.fill",
+                    isEnabled: !model.speechInput.isStarting,
                     isProminent: true,
                     tint: model.speechInput.isRecording ? .red : .blue
                 ) {
