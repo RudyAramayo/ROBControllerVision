@@ -3,6 +3,7 @@ import SwiftUI
 
 struct ContentView: View {
     @Bindable var model: RobotViewModel
+    @Environment(\.openImmersiveSpace) private var openImmersiveSpace
     @FocusState private var receivesControllerEvents: Bool
 
     var body: some View {
@@ -40,6 +41,13 @@ struct ContentView: View {
         .onAppear {
             receivesControllerEvents = true
         }
+        #if DEBUG
+            .task {
+                if ProcessInfo.processInfo.arguments.contains("--immersive-smoke-test") {
+                    _ = await openImmersiveSpace(id: "insta360-immersive")
+                }
+            }
+        #endif
     }
 
     private func wideDeck(size: CGSize) -> some View {
