@@ -285,51 +285,52 @@ struct Insta360ImmersiveView: View {
     @State private var renderer = Insta360SphereRenderer()
 
     var body: some View {
-        RealityView { content in
+        RealityView { content, attachments in
             do {
                 content.add(try renderer.makeSphere())
+                if let controls = attachments.entity(for: "insta360-controls") {
+                    let controlsAnchor = AnchorEntity(.head, trackingMode: .once)
+                    controls.position = SIMD3<Float>(0, 0.15, -1)
+                    controlsAnchor.addChild(controls)
+                    content.add(controlsAnchor)
+                }
                 renderer.start(pipeline: model.insta360VideoPipeline)
             } catch {
                 renderer.errorMessage = error.localizedDescription
             }
-        }
-        .overlay(alignment: .bottomTrailing) {
-            // Keep the parallel flat renderer attached so switching back to
-            // the window does not require rebuilding its presentation state.
-            // The sphere itself uses the independent VideoToolbox frame path.
-            SampleBufferVideoView(displayLayer: model.insta360VideoPipeline.displayLayer)
-                .frame(width: 2, height: 1)
-                .opacity(0.001)
-                .allowsHitTesting(false)
-        }
-        .overlay(alignment: .top) {
-            HStack(spacing: 12) {
-                Label("LIVE 360°", systemImage: "pano.fill")
-                Text(renderer.statusMessage)
-                    .foregroundStyle(.secondary)
-                if let errorMessage = renderer.errorMessage {
-                    Text(errorMessage).foregroundStyle(.red)
-                }
-                Button("Flat Window", systemImage: "macwindow") {
-                    openWindow(id: "insta360-window")
-                    Task { await dismissImmersiveSpace() }
-                }
-                Button("Exit", systemImage: "xmark") {
-                    Task { await dismissImmersiveSpace() }
-                }
+        } attachments: {
+            Attachment(id: "insta360-controls") {
+                immersiveControls
             }
-            .font(.headline)
-            .padding(14)
-            .background(.ultraThinMaterial, in: Capsule())
-            .padding(.top, 28)
         }
         .onAppear {
-            // Full immersion may background or remove the presenting window.
+            // An immersive transition may background the presenting window.
             // Keep the shared session and video subscriptions alive here.
             model.start()
             model.setSceneActive(true)
         }
         .onDisappear { renderer.stop() }
+    }
+
+    private var immersiveControls: some View {
+        HStack(spacing: 12) {
+            Label("LIVE 360°", systemImage: "pano.fill")
+            Text(renderer.statusMessage)
+                .foregroundStyle(.secondary)
+            if let errorMessage = renderer.errorMessage {
+                Text(errorMessage).foregroundStyle(.red)
+            }
+            Button("Flat Window", systemImage: "macwindow") {
+                openWindow(id: "insta360-window")
+                Task { await dismissImmersiveSpace() }
+            }
+            Button("Exit", systemImage: "xmark") {
+                Task { await dismissImmersiveSpace() }
+            }
+        }
+        .font(.headline)
+        .padding(14)
+        .glassBackgroundEffect(in: .capsule)
     }
 }
 
@@ -342,7 +343,7 @@ private final class Insta360SphereRenderer {
     @ObservationIgnored private static let textureWidth = 960
     @ObservationIgnored private static let textureHeight = 480
     @ObservationIgnored private var textureResource: TextureResource?
-    @ObservationIgnored private var diagnosticMarker: Entity?
+    @ObservationIgnored private var sphereEntity: ModelEntity?
     @ObservationIgnored private var renderTask: Task<Void, Never>?
     @ObservationIgnored private let ciContext = CIContext(
         options: [.cacheIntermediates: false]
@@ -352,38 +353,25 @@ private final class Insta360SphereRenderer {
 
     func makeSphere() throws -> Entity {
         let texture = try makeDiagnosticTexture()
-        var material = UnlitMaterial(texture: texture)
-        material.faceCulling = .none
-        material.readsDepth = true
-        material.writesDepth = false
+        let material = makeVideoMaterial(texture: texture)
 
         let sphere = ModelEntity(
-            mesh: try makeInwardSphereMesh(radius: 10),
+            // Keep every ROBControllerVision window and normal room-scale
+            // movement inside the panorama. A small sphere becomes a visible
+            // circle and can depth-occlude the faster flat camera surfaces.
+            mesh: .generateSphere(radius: 50),
             materials: [material]
         )
         sphere.name = "insta360-inward-sphere"
-        // An immersive space starts near floor level; center the panorama at
-        // an ordinary seated/standing eye height instead of around the floor.
-        sphere.position = SIMD3<Float>(0, 1.45, 0)
 
-        var markerMaterial = UnlitMaterial(
-            color: .init(red: 1, green: 0.08, blue: 0.08, alpha: 1)
-        )
-        markerMaterial.readsDepth = true
-        markerMaterial.writesDepth = true
-        let marker = ModelEntity(
-            mesh: .generateBox(size: 0.16),
-            materials: [markerMaterial]
-        )
-        marker.name = "insta360-realityview-marker"
-        marker.position = SIMD3<Float>(0, 1.45, -1.2)
-
-        let root = Entity()
+        // Capture the headset pose once when immersion begins. The panorama
+        // starts around the viewer, then stays world-locked so head rotation
+        // naturally looks around the equirectangular image.
+        let root = AnchorEntity(.head, trackingMode: .once)
         root.addChild(sphere)
-        root.addChild(marker)
-        self.textureResource = texture
-        diagnosticMarker = marker
-        statusMessage = "Checkerboard ready • waiting for video…"
+        textureResource = texture
+        sphereEntity = sphere
+        statusMessage = "Immersive renderer ready • waiting for video…"
         return root
     }
 
@@ -432,7 +420,7 @@ private final class Insta360SphereRenderer {
     ) async throws -> SphereFrameDrawResult {
         guard let frame = pipeline.decodedFrame() else { return .noDecodedFrame }
         guard frame.sequence != lastPresentedSequence else { return .unchanged }
-        guard let textureResource else {
+        guard sphereEntity != nil else {
             throw Insta360SphereError.rendererNotReady
         }
         let bounds = CGRect(
@@ -466,98 +454,84 @@ private final class Insta360SphereRenderer {
         guard let image = ciContext.createCGImage(fitted, from: bounds) else {
             throw Insta360SphereError.imageCreationFailed
         }
-        try await textureResource.replace(
-            using: image,
+        // Create and bind a new GPU asset so the model's material observes
+        // every decoded frame; in-place replacement remained black in the
+        // immersive compositor even though the upload reported success.
+        let nextTexture = try await TextureResource(
+            image: image,
+            withName: nil,
             options: .init(semantic: .color, mipmapsMode: .none)
         )
+        sphereEntity?.model?.materials = [makeVideoMaterial(texture: nextTexture)]
+        textureResource = nextTexture
         lastPresentedSequence = frame.sequence
-        diagnosticMarker?.isEnabled = false
         return .presented
     }
 
-    private func makeInwardSphereMesh(
-        radius: Float,
-        horizontalSegments: Int = 96,
-        verticalSegments: Int = 48
-    ) throws -> MeshResource {
-        var positions: [SIMD3<Float>] = []
-        var normals: [SIMD3<Float>] = []
-        var textureCoordinates: [SIMD2<Float>] = []
-        var indices: [UInt32] = []
-        let vertexCount = (horizontalSegments + 1) * (verticalSegments + 1)
-        positions.reserveCapacity(vertexCount)
-        normals.reserveCapacity(vertexCount)
-        textureCoordinates.reserveCapacity(vertexCount)
-        indices.reserveCapacity(horizontalSegments * verticalSegments * 6)
-
-        for row in 0...verticalSegments {
-            let v = Float(row) / Float(verticalSegments)
-            let theta = v * .pi
-            let ringRadius = sin(theta)
-            let y = cos(theta)
-            for column in 0...horizontalSegments {
-                let u = Float(column) / Float(horizontalSegments)
-                let phi = u * 2 * .pi
-                let direction = SIMD3<Float>(
-                    ringRadius * sin(phi),
-                    y,
-                    -ringRadius * cos(phi)
-                )
-                positions.append(direction * radius)
-                normals.append(-direction)
-                textureCoordinates.append(SIMD2<Float>(u, 1 - v))
-            }
-        }
-
-        let stride = horizontalSegments + 1
-        for row in 0..<verticalSegments {
-            for column in 0..<horizontalSegments {
-                let upperLeft = UInt32((row * stride) + column)
-                let upperRight = upperLeft + 1
-                let lowerLeft = UInt32(((row + 1) * stride) + column)
-                let lowerRight = lowerLeft + 1
-                // Reverse the ordinary outward winding so the textured face
-                // is explicitly directed toward the viewer inside the sphere.
-                indices.append(contentsOf: [upperLeft, lowerLeft, upperRight])
-                indices.append(contentsOf: [upperRight, lowerLeft, lowerRight])
-            }
-        }
-
-        var descriptor = MeshDescriptor(name: "Insta360 inward equirectangular sphere")
-        descriptor.positions = .init(positions)
-        descriptor.normals = .init(normals)
-        descriptor.textureCoordinates = .init(textureCoordinates)
-        descriptor.primitives = .triangles(indices)
-        return try MeshResource.generate(from: [descriptor])
+    private func makeVideoMaterial(texture: TextureResource) -> UnlitMaterial {
+        var material = UnlitMaterial(texture: texture)
+        // The equirectangular feed is viewed from the inside of the generated
+        // sphere, so reverse U to preserve the camera's right-to-left view.
+        material.textureCoordinateTransform = .init(
+            offset: SIMD2<Float>(1, 0),
+            scale: SIMD2<Float>(-1, 1)
+        )
+        // A generated sphere's front faces point outward. Cull those faces so
+        // RealityKit draws only the back faces seen by the viewer inside it.
+        material.faceCulling = .front
+        material.readsDepth = true
+        material.writesDepth = false
+        return material
     }
 
     private func makeDiagnosticTexture() throws -> TextureResource {
         let width = Self.textureWidth
         let height = Self.textureHeight
-        var pixels = Data(count: width * height * 4)
-        pixels.withUnsafeMutableBytes { rawBuffer in
-            let bytes = rawBuffer.bindMemory(to: UInt8.self)
-            for y in 0..<height {
-                for x in 0..<width {
-                    let offset = ((y * width) + x) * 4
-                    let alternate = ((x / 80) + (y / 80)).isMultiple(of: 2)
-                    bytes[offset] = alternate ? 32 : 180
-                    bytes[offset + 1] = 32
-                    bytes[offset + 2] = alternate ? 180 : 32
-                    bytes[offset + 3] = 255
-                }
+        let bytesPerRow = width * 4
+        guard let context = CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: bytesPerRow,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else {
+            throw Insta360SphereError.imageCreationFailed
+        }
+        let tileWidth = width / 12
+        let tileHeight = height / 6
+        for row in 0..<6 {
+            for column in 0..<12 {
+                let alternate = (row + column).isMultiple(of: 2)
+                context.setFillColor(
+                    CGColor(
+                        red: alternate ? 0.04 : 0.08,
+                        green: alternate ? 0.14 : 0.38,
+                        blue: alternate ? 0.55 : 0.82,
+                        alpha: 1
+                    )
+                )
+                context.fill(
+                    CGRect(
+                        x: column * tileWidth,
+                        y: row * tileHeight,
+                        width: tileWidth,
+                        height: tileHeight
+                    )
+                )
             }
         }
+        guard let image = context.makeImage() else {
+            throw Insta360SphereError.imageCreationFailed
+        }
         return try TextureResource(
-            dimensions: .dimensions(width: width, height: height),
-            format: .raw(pixelFormat: .bgra8Unorm),
-            contents: .init(
-                mipmapLevels: [
-                    .mip(data: pixels, bytesPerRow: width * 4)
-                ]
-            )
+            image: image,
+            withName: "Insta360 immersive diagnostic",
+            options: .init(semantic: .color, mipmapsMode: .none)
         )
     }
+
 }
 
 private enum SphereFrameDrawResult {

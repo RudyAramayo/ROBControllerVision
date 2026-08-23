@@ -39,6 +39,9 @@ struct ROBControllerVisionApp: App {
         ImmersiveSpace(id: "insta360-immersive") {
             Insta360ImmersiveView(model: model)
         }
-        .immersionStyle(selection: .constant(.full), in: .full)
+        // The opaque panorama still fills the viewer's surroundings. Mixed
+        // mode avoids the full-space compositor path that rendered the live
+        // RealityKit texture black on Vision Pro.
+        .immersionStyle(selection: .constant(.mixed), in: .mixed)
     }
 }
