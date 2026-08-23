@@ -313,24 +313,58 @@ struct Insta360ImmersiveView: View {
     }
 
     private var immersiveControls: some View {
-        HStack(spacing: 12) {
-            Label("LIVE 360°", systemImage: "pano.fill")
-            Text(renderer.statusMessage)
-                .foregroundStyle(.secondary)
-            if let errorMessage = renderer.errorMessage {
-                Text(errorMessage).foregroundStyle(.red)
+        VStack(spacing: 10) {
+            HStack(spacing: 12) {
+                Label("LIVE 360°", systemImage: "pano.fill")
+                Text(renderer.statusMessage)
+                    .foregroundStyle(.secondary)
+                if let errorMessage = renderer.errorMessage {
+                    Text(errorMessage).foregroundStyle(.red)
+                }
             }
-            Button("Flat Window", systemImage: "macwindow") {
-                openWindow(id: "insta360-window")
-                Task { await dismissImmersiveSpace() }
-            }
-            Button("Exit", systemImage: "xmark") {
-                Task { await dismissImmersiveSpace() }
+
+            HStack(spacing: 10) {
+                Button("Rotate Left", systemImage: "arrow.left") {
+                    renderer.rotateView(byDegrees: -15)
+                }
+
+                Slider(
+                    value: Binding(
+                        get: { Double(renderer.viewHeadingDegrees) },
+                        set: { renderer.setViewHeading(degrees: Float($0)) }
+                    ),
+                    in: -180...180,
+                    step: 1
+                )
+                .frame(width: 220)
+                .accessibilityLabel("360 degree view heading")
+                .accessibilityValue(renderer.headingDescription)
+
+                Button("Rotate Right", systemImage: "arrow.right") {
+                    renderer.rotateView(byDegrees: 15)
+                }
+
+                Button("Face Robot Front", systemImage: "scope") {
+                    renderer.alignWithRobotFront()
+                }
+                .buttonStyle(.borderedProminent)
+
+                Text(renderer.headingDescription)
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+
+                Button("Flat Window", systemImage: "macwindow") {
+                    openWindow(id: "insta360-window")
+                    Task { await dismissImmersiveSpace() }
+                }
+                Button("Exit", systemImage: "xmark") {
+                    Task { await dismissImmersiveSpace() }
+                }
             }
         }
         .font(.headline)
         .padding(14)
-        .glassBackgroundEffect(in: .capsule)
+        .glassBackgroundEffect(in: .rect(cornerRadius: 24))
     }
 }
 
@@ -339,9 +373,22 @@ struct Insta360ImmersiveView: View {
 private final class Insta360SphereRenderer {
     var errorMessage: String?
     var statusMessage = "Preparing 360° texture…"
+    private(set) var viewHeadingDegrees: Float = 0
+
+    var headingDescription: String {
+        let roundedDegrees = Int(viewHeadingDegrees.rounded())
+        if roundedDegrees == 0 { return "Robot front" }
+        return roundedDegrees < 0
+            ? "\(abs(roundedDegrees))° left"
+            : "\(roundedDegrees)° right"
+    }
 
     @ObservationIgnored private static let textureWidth = 960
     @ObservationIgnored private static let textureHeight = 480
+    // RealityKit's generated sphere maps the equirectangular center longitude
+    // 90° to the viewer's right at identity. Rotate it back at entry so the
+    // Insta360 image center (the robot's forward view) faces headset-forward.
+    @ObservationIgnored private static let robotForwardYaw: Float = -.pi / 2
     @ObservationIgnored private var textureResource: TextureResource?
     @ObservationIgnored private var sphereEntity: ModelEntity?
     @ObservationIgnored private var renderTask: Task<Void, Never>?
@@ -371,8 +418,27 @@ private final class Insta360SphereRenderer {
         root.addChild(sphere)
         textureResource = texture
         sphereEntity = sphere
+        alignWithRobotFront()
         statusMessage = "Immersive renderer ready • waiting for video…"
         return root
+    }
+
+    func alignWithRobotFront() {
+        setViewHeading(degrees: 0)
+    }
+
+    func rotateView(byDegrees delta: Float) {
+        setViewHeading(degrees: viewHeadingDegrees + delta)
+    }
+
+    func setViewHeading(degrees: Float) {
+        guard degrees.isFinite else { return }
+        viewHeadingDegrees = Self.normalizedHeading(degrees)
+        let viewHeadingRadians = viewHeadingDegrees * .pi / 180
+        sphereEntity?.orientation = simd_quatf(
+            angle: Self.robotForwardYaw - viewHeadingRadians,
+            axis: SIMD3<Float>(0, 1, 0)
+        )
     }
 
     func start(pipeline: VideoPipelineCoordinator) {
@@ -413,6 +479,13 @@ private final class Insta360SphereRenderer {
         renderTask = nil
         lastPresentedSequence = nil
         presentedFrameCount = 0
+    }
+
+    private static func normalizedHeading(_ degrees: Float) -> Float {
+        var normalized = degrees.truncatingRemainder(dividingBy: 360)
+        if normalized > 180 { normalized -= 360 }
+        if normalized < -180 { normalized += 360 }
+        return normalized
     }
 
     private func drawLatestFrame(
