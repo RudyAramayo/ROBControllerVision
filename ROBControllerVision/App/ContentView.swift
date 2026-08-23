@@ -37,12 +37,8 @@ struct ContentView: View {
         .handlesGameControllerEvents(matching: .gamepad)
         .focusable()
         .focused($receivesControllerEvents)
-        .task {
+        .onAppear {
             receivesControllerEvents = true
-            model.start()
-        }
-        .onDisappear {
-            model.stop()
         }
     }
 

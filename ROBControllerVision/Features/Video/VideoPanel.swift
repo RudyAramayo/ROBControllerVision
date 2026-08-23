@@ -1,6 +1,5 @@
 import CoreImage
 import Foundation
-import Metal
 import Observation
 import RealityKit
 import ROBControlCore
@@ -324,6 +323,12 @@ struct Insta360ImmersiveView: View {
             .background(.ultraThinMaterial, in: Capsule())
             .padding(.top, 28)
         }
+        .onAppear {
+            // Full immersion may background or remove the presenting window.
+            // Keep the shared session and video subscriptions alive here.
+            model.start()
+            model.setSceneActive(true)
+        }
         .onDisappear { renderer.stop() }
     }
 }
@@ -337,57 +342,49 @@ private final class Insta360SphereRenderer {
     @ObservationIgnored private static let textureWidth = 960
     @ObservationIgnored private static let textureHeight = 480
     @ObservationIgnored private var textureResource: TextureResource?
-    @ObservationIgnored private var drawableQueue: TextureResource.DrawableQueue?
+    @ObservationIgnored private var diagnosticMarker: Entity?
     @ObservationIgnored private var renderTask: Task<Void, Never>?
-    @ObservationIgnored private let device = MTLCreateSystemDefaultDevice()
-    @ObservationIgnored private var commandQueue: MTLCommandQueue?
-    @ObservationIgnored private var ciContext: CIContext?
+    @ObservationIgnored private let ciContext = CIContext(
+        options: [.cacheIntermediates: false]
+    )
     @ObservationIgnored private var lastPresentedSequence: UInt64?
     @ObservationIgnored private var presentedFrameCount: UInt64 = 0
 
     func makeSphere() throws -> Entity {
-        guard let device else {
-            throw Insta360SphereError.metalUnavailable
-        }
-        guard let commandQueue = device.makeCommandQueue() else {
-            throw Insta360SphereError.commandQueueUnavailable
-        }
-        let drawableQueue = try TextureResource.DrawableQueue(
-            .init(
-                pixelFormat: .bgra8Unorm,
-                width: Self.textureWidth,
-                height: Self.textureHeight,
-                usage: [.shaderRead, .shaderWrite, .renderTarget],
-                mipmapsMode: .none
-            )
-        )
-        drawableQueue.allowsNextDrawableTimeout = true
         let texture = try makeDiagnosticTexture()
-        texture.replace(withDrawables: drawableQueue)
         var material = UnlitMaterial(texture: texture)
         material.faceCulling = .none
-        material.readsDepth = false
+        material.readsDepth = true
         material.writesDepth = false
 
         let sphere = ModelEntity(
-            mesh: .generateSphere(radius: 10),
+            mesh: try makeInwardSphereMesh(radius: 10),
             materials: [material]
         )
-        // Flip the generated sphere so its textured face and UVs are visible
-        // from the pilot's position at the center.
-        sphere.scale = SIMD3<Float>(-1, 1, 1)
-        self.textureResource = texture
-        self.drawableQueue = drawableQueue
-        self.commandQueue = commandQueue
-        let ciContext = CIContext(mtlDevice: device)
-        self.ciContext = ciContext
-        try presentDiagnosticFrame(
-            using: drawableQueue,
-            commandQueue: commandQueue,
-            ciContext: ciContext
+        sphere.name = "insta360-inward-sphere"
+        // An immersive space starts near floor level; center the panorama at
+        // an ordinary seated/standing eye height instead of around the floor.
+        sphere.position = SIMD3<Float>(0, 1.45, 0)
+
+        var markerMaterial = UnlitMaterial(
+            color: .init(red: 1, green: 0.08, blue: 0.08, alpha: 1)
         )
-        statusMessage = "Texture visible • waiting for video…"
-        return sphere
+        markerMaterial.readsDepth = true
+        markerMaterial.writesDepth = true
+        let marker = ModelEntity(
+            mesh: .generateBox(size: 0.16),
+            materials: [markerMaterial]
+        )
+        marker.name = "insta360-realityview-marker"
+        marker.position = SIMD3<Float>(0, 1.45, -1.2)
+
+        let root = Entity()
+        root.addChild(sphere)
+        root.addChild(marker)
+        self.textureResource = texture
+        diagnosticMarker = marker
+        statusMessage = "Checkerboard ready • waiting for video…"
+        return root
     }
 
     func start(pipeline: VideoPipelineCoordinator) {
@@ -398,7 +395,7 @@ private final class Insta360SphereRenderer {
             while !Task.isCancelled {
                 guard let self else { return }
                 do {
-                    switch try drawLatestFrame(from: pipeline) {
+                    switch try await drawLatestFrame(from: pipeline) {
                     case .noDecodedFrame:
                         if startedAt.duration(to: clock.now) > .seconds(2) {
                             statusMessage = "No decoded frame"
@@ -418,7 +415,7 @@ private final class Insta360SphereRenderer {
                     statusMessage = "Texture upload failed"
                     errorMessage = error.localizedDescription
                 }
-                try? await clock.sleep(for: .milliseconds(16))
+                try? await clock.sleep(for: .milliseconds(33))
             }
         }
     }
@@ -432,17 +429,18 @@ private final class Insta360SphereRenderer {
 
     private func drawLatestFrame(
         from pipeline: VideoPipelineCoordinator
-    ) throws -> SphereFrameDrawResult {
+    ) async throws -> SphereFrameDrawResult {
         guard let frame = pipeline.decodedFrame() else { return .noDecodedFrame }
         guard frame.sequence != lastPresentedSequence else { return .unchanged }
-        guard let drawableQueue,
-              let commandBuffer = commandQueue?.makeCommandBuffer(),
-              let ciContext else {
+        guard let textureResource else {
             throw Insta360SphereError.rendererNotReady
         }
-        let drawable = try drawableQueue.nextDrawable()
-        let destination = drawable.texture
-        let bounds = CGRect(x: 0, y: 0, width: destination.width, height: destination.height)
+        let bounds = CGRect(
+            x: 0,
+            y: 0,
+            width: Self.textureWidth,
+            height: Self.textureHeight
+        )
         let source = CIImage(cvPixelBuffer: frame.pixelBuffer)
         let normalized = source.transformed(
             by: CGAffineTransform(
@@ -465,59 +463,72 @@ private final class Insta360SphereRenderer {
                 y: bounds.height / upright.extent.height
             )
         )
-        ciContext.render(
-            fitted,
-            to: destination,
-            commandBuffer: commandBuffer,
-            bounds: bounds,
-            colorSpace: CGColorSpaceCreateDeviceRGB()
+        guard let image = ciContext.createCGImage(fitted, from: bounds) else {
+            throw Insta360SphereError.imageCreationFailed
+        }
+        try await textureResource.replace(
+            using: image,
+            options: .init(semantic: .color, mipmapsMode: .none)
         )
-        observeCompletion(of: commandBuffer)
-        commandBuffer.present(drawable)
-        commandBuffer.commit()
         lastPresentedSequence = frame.sequence
+        diagnosticMarker?.isEnabled = false
         return .presented
     }
 
-    private func presentDiagnosticFrame(
-        using drawableQueue: TextureResource.DrawableQueue,
-        commandQueue: MTLCommandQueue,
-        ciContext: CIContext
-    ) throws {
-        guard let commandBuffer = commandQueue.makeCommandBuffer() else {
-            throw Insta360SphereError.rendererNotReady
-        }
-        let drawable = try drawableQueue.nextDrawable()
-        let bounds = CGRect(
-            x: 0,
-            y: 0,
-            width: drawable.texture.width,
-            height: drawable.texture.height
-        )
-        let diagnosticImage = CIImage(
-            color: CIColor(red: 0.08, green: 0.2, blue: 0.55, alpha: 1)
-        ).cropped(to: bounds)
-        ciContext.render(
-            diagnosticImage,
-            to: drawable.texture,
-            commandBuffer: commandBuffer,
-            bounds: bounds,
-            colorSpace: CGColorSpaceCreateDeviceRGB()
-        )
-        observeCompletion(of: commandBuffer)
-        commandBuffer.present(drawable)
-        commandBuffer.commit()
-    }
+    private func makeInwardSphereMesh(
+        radius: Float,
+        horizontalSegments: Int = 96,
+        verticalSegments: Int = 48
+    ) throws -> MeshResource {
+        var positions: [SIMD3<Float>] = []
+        var normals: [SIMD3<Float>] = []
+        var textureCoordinates: [SIMD2<Float>] = []
+        var indices: [UInt32] = []
+        let vertexCount = (horizontalSegments + 1) * (verticalSegments + 1)
+        positions.reserveCapacity(vertexCount)
+        normals.reserveCapacity(vertexCount)
+        textureCoordinates.reserveCapacity(vertexCount)
+        indices.reserveCapacity(horizontalSegments * verticalSegments * 6)
 
-    private func observeCompletion(of commandBuffer: MTLCommandBuffer) {
-        commandBuffer.addCompletedHandler { [weak self] completedBuffer in
-            guard let error = completedBuffer.error else { return }
-            Task { @MainActor [weak self] in
-                self?.statusMessage = "GPU upload failed"
-                self?.errorMessage =
-                    "The 360° GPU upload failed: \(error.localizedDescription)"
+        for row in 0...verticalSegments {
+            let v = Float(row) / Float(verticalSegments)
+            let theta = v * .pi
+            let ringRadius = sin(theta)
+            let y = cos(theta)
+            for column in 0...horizontalSegments {
+                let u = Float(column) / Float(horizontalSegments)
+                let phi = u * 2 * .pi
+                let direction = SIMD3<Float>(
+                    ringRadius * sin(phi),
+                    y,
+                    -ringRadius * cos(phi)
+                )
+                positions.append(direction * radius)
+                normals.append(-direction)
+                textureCoordinates.append(SIMD2<Float>(u, 1 - v))
             }
         }
+
+        let stride = horizontalSegments + 1
+        for row in 0..<verticalSegments {
+            for column in 0..<horizontalSegments {
+                let upperLeft = UInt32((row * stride) + column)
+                let upperRight = upperLeft + 1
+                let lowerLeft = UInt32(((row + 1) * stride) + column)
+                let lowerRight = lowerLeft + 1
+                // Reverse the ordinary outward winding so the textured face
+                // is explicitly directed toward the viewer inside the sphere.
+                indices.append(contentsOf: [upperLeft, lowerLeft, upperRight])
+                indices.append(contentsOf: [upperRight, lowerLeft, lowerRight])
+            }
+        }
+
+        var descriptor = MeshDescriptor(name: "Insta360 inward equirectangular sphere")
+        descriptor.positions = .init(positions)
+        descriptor.normals = .init(normals)
+        descriptor.textureCoordinates = .init(textureCoordinates)
+        descriptor.primitives = .triangles(indices)
+        return try MeshResource.generate(from: [descriptor])
     }
 
     private func makeDiagnosticTexture() throws -> TextureResource {
@@ -556,18 +567,15 @@ private enum SphereFrameDrawResult {
 }
 
 private enum Insta360SphereError: LocalizedError {
-    case metalUnavailable
-    case commandQueueUnavailable
     case rendererNotReady
+    case imageCreationFailed
 
     var errorDescription: String? {
         switch self {
-        case .metalUnavailable:
-            "The headset could not create the Metal renderer for the 360° sphere."
-        case .commandQueueUnavailable:
-            "The headset could not create the Metal command queue for the 360° sphere."
         case .rendererNotReady:
             "The 360° texture renderer is not ready."
+        case .imageCreationFailed:
+            "The decoded Insta360 frame could not be converted into a RealityKit image."
         }
     }
 }
