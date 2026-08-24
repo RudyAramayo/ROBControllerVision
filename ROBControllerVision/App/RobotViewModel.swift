@@ -434,7 +434,8 @@ final class RobotViewModel {
     }
 
     func requestControl() {
-        guard !snapshot.safety.isArmed else { return }
+        guard snapshot.safety.controlAuthority != .requesting,
+              snapshot.safety.controlAuthority != .granted else { return }
         if hasAnyActiveArmControl {
             statusMessage = "Disable Amber arm control before enabling drive control"
             return
@@ -446,7 +447,8 @@ final class RobotViewModel {
     }
 
     func releaseControl() {
-        guard snapshot.safety.isArmed else { return }
+        guard snapshot.safety.controlAuthority == .granted
+                || snapshot.safety.controlAuthority == .requesting else { return }
         endVirtualMotion()
         cancelArmMotionLocally()
         let session = session
@@ -1767,7 +1769,17 @@ final class RobotViewModel {
         case .handshaking:
             statusMessage = "Negotiating protocol capabilities…"
         case .connected:
-            statusMessage = snapshot.safety.inhibitReason?.description ?? "Motion control ready"
+            switch snapshot.safety.controlAuthority {
+            case .unknown:
+                statusMessage = "Connected and verified; drive control is unconfirmed"
+            case .requesting:
+                statusMessage = "Waiting for ROB to grant drive control…"
+            case .granted:
+                statusMessage = snapshot.safety.inhibitReason?.description
+                    ?? "ROBOT granted drive control"
+            case .notGranted:
+                statusMessage = "ROBOT has not granted this Vision Pro drive control"
+            }
         case .disconnecting:
             statusMessage = "Disconnecting…"
         case .failed:

@@ -7,7 +7,46 @@ struct ControlPanel: View {
     private var controlsEnabled: Bool {
         model.snapshot.connection.isReady
             && model.snapshot.safety.isArmed
+            && model.snapshot.safety.controlAuthority == .granted
             && !model.snapshot.safety.emergencyStopIsLatched
+    }
+
+    private var authorityStatus: (
+        title: String,
+        detail: String,
+        systemImage: String,
+        color: Color
+    ) {
+        switch model.snapshot.safety.controlAuthority {
+        case .unknown:
+            (
+                "CONTROL UNCONFIRMED",
+                "Connected, but ROB has not confirmed drive permission.",
+                "questionmark.circle.fill",
+                .secondary
+            )
+        case .requesting:
+            (
+                "CONTROL REQUESTING…",
+                "Waiting for ROB's authorization response.",
+                "hourglass",
+                .orange
+            )
+        case .granted:
+            (
+                "CONTROL GRANTED BY ROBOT",
+                "ROB confirmed this Vision Pro as the active drive controller.",
+                "checkmark.shield.fill",
+                .green
+            )
+        case .notGranted:
+            (
+                "CONTROL NOT GRANTED",
+                "Cerebro, autonomy, or another controller currently owns drive control.",
+                "xmark.shield.fill",
+                .red
+            )
+        }
     }
 
     var body: some View {
@@ -68,16 +107,15 @@ struct ControlPanel: View {
                 .font(.caption2)
                 .foregroundStyle(.secondary)
 
-            Label(
-                model.snapshot.safety.isArmed
-                    ? "Vision Pro is the active drive input"
-                    : "Drive input is owned by Cerebro or another controller",
-                systemImage: model.snapshot.safety.isArmed
-                    ? "person.crop.circle.badge.checkmark"
-                    : "person.crop.circle.badge.questionmark"
-            )
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(model.snapshot.safety.isArmed ? .green : .secondary)
+            VStack(alignment: .leading, spacing: 4) {
+                Label(authorityStatus.title, systemImage: authorityStatus.systemImage)
+                    .font(.caption.weight(.bold))
+                Text(authorityStatus.detail)
+                    .font(.caption2)
+            }
+            .foregroundStyle(authorityStatus.color)
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("robotControlAuthorityStatus")
 
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
@@ -118,29 +156,34 @@ struct ControlPanel: View {
             }
 
             Button {
-                if model.snapshot.safety.isArmed {
+                if model.snapshot.safety.controlAuthority == .granted {
                     model.releaseControl()
                 } else {
                     model.requestControl()
                 }
             } label: {
                 Label(
-                    model.snapshot.safety.isArmed ? "Release Control" : "Request Control",
-                    systemImage: model.snapshot.safety.isArmed
+                    model.snapshot.safety.controlAuthority == .granted
+                        ? "Release Control"
+                        : model.snapshot.safety.controlAuthority == .requesting
+                            ? "Requesting Control…"
+                            : "Request Control",
+                    systemImage: model.snapshot.safety.controlAuthority == .granted
                         ? "person.crop.circle.badge.minus"
                         : "person.crop.circle.badge.plus"
                 )
                 .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
-            .tint(model.snapshot.safety.isArmed ? .orange : .blue)
+            .tint(model.snapshot.safety.controlAuthority == .granted ? .orange : .blue)
             .disabled(
                 !model.snapshot.connection.isReady
                     || model.snapshot.safety.emergencyStopIsLatched
+                    || model.snapshot.safety.controlAuthority == .requesting
             )
 
             Text(
-                "Request Control safely stops the previous input and transfers drive commands to this Vision Pro. Release Control brakes ROB and returns input ownership to Cerebro."
+                "Request Control stays pending until ROB explicitly confirms this Vision Pro. Green means confirmed robot authority; network connection alone never grants drive control."
             )
             .font(.caption2)
             .foregroundStyle(.secondary)

@@ -252,6 +252,15 @@ struct SimulatedRobotEndpointTests {
         )
         await session.connect(using: endpoint)
         await session.setArmed(true)
+        let clock = ContinuousClock()
+        let grantDeadline = clock.now.advanced(by: .seconds(1))
+        while clock.now < grantDeadline {
+            if await session.currentSnapshot().safety.controlAuthority == .granted {
+                break
+            }
+            try? await clock.sleep(for: .milliseconds(5))
+        }
+        #expect(await session.currentSnapshot().safety.controlAuthority == .granted)
         await session.updateOperatorInput(
             OperatorControlSample(
                 sequence: 1,

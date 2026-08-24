@@ -170,19 +170,33 @@ public struct RobotTelemetry: Codable, Hashable, Sendable {
     }
 }
 
+public enum MotionControlAuthorityState: String, Codable, Hashable, Sendable {
+    /// The transport is connected, but ROB has not confirmed who owns drive control.
+    case unknown
+    /// A request was sent and the controller is waiting for ROB's authority update.
+    case requesting
+    /// ROB explicitly named this controller as the active drive controller.
+    case granted
+    /// ROB explicitly named Cerebro, autonomy, or a different controller.
+    case notGranted
+}
+
 public struct MotionSafetyState: Codable, Hashable, Sendable {
     public var isArmed: Bool
+    public var controlAuthority: MotionControlAuthorityState
     public var emergencyStopIsLatched: Bool
     public var inhibitReason: MotionInhibitReason?
     public var lastCommandSequence: UInt64?
 
     public init(
         isArmed: Bool = false,
+        controlAuthority: MotionControlAuthorityState = .unknown,
         emergencyStopIsLatched: Bool = false,
         inhibitReason: MotionInhibitReason? = .operatorDisarmed,
         lastCommandSequence: UInt64? = nil
     ) {
         self.isArmed = isArmed
+        self.controlAuthority = controlAuthority
         self.emergencyStopIsLatched = emergencyStopIsLatched
         self.inhibitReason = inhibitReason
         self.lastCommandSequence = lastCommandSequence

@@ -12,17 +12,20 @@ public actor RobotSession {
         public var inputTimeout: Duration
         public var commandLeaseMilliseconds: UInt32
         public var gripperDispositionTimeout: Duration
+        public var motionAuthorityRequestTimeout: Duration
 
         public init(
             commandInterval: Duration = .milliseconds(100),
             inputTimeout: Duration = .milliseconds(250),
             commandLeaseMilliseconds: UInt32 = 250,
-            gripperDispositionTimeout: Duration = .seconds(2)
+            gripperDispositionTimeout: Duration = .seconds(2),
+            motionAuthorityRequestTimeout: Duration = .seconds(4)
         ) {
             self.commandInterval = commandInterval
             self.inputTimeout = inputTimeout
             self.commandLeaseMilliseconds = commandLeaseMilliseconds
             self.gripperDispositionTimeout = gripperDispositionTimeout
+            self.motionAuthorityRequestTimeout = motionAuthorityRequestTimeout
         }
     }
 
@@ -40,6 +43,7 @@ public actor RobotSession {
         [VideoSubscriptionID: CheckedContinuation<VideoSubscriptionResponse, Error>] = [:]
     private var videoTimeoutTasks: [VideoSubscriptionID: Task<Void, Never>] = [:]
     private var gripperTimeoutTasks: [RobotArmSide: Task<Void, Never>] = [:]
+    private var motionAuthorityTimeoutTask: Task<Void, Never>?
     private var abandonedVideoSubscriptions: Set<VideoSubscriptionID> = []
     private var videoDataChannelOwners: [UUID: VideoDataChannelOwnership] = [:]
     private var deadMan: DeadManController
@@ -58,6 +62,7 @@ public actor RobotSession {
         eventTask?.cancel()
         commandTask?.cancel()
         disconnectTask?.cancel()
+        motionAuthorityTimeoutTask?.cancel()
         for task in videoTimeoutTasks.values {
             task.cancel()
         }
@@ -119,6 +124,9 @@ public actor RobotSession {
         transport = newTransport
         deadMan.setArmed(false)
         deadMan.invalidateInput(reason: .disconnected)
+        motionAuthorityTimeoutTask?.cancel()
+        motionAuthorityTimeoutTask = nil
+        snapshot.safety.controlAuthority = .unknown
         commandSequence = 0
         cancelGripperTimeouts()
         robotActionHelloSentAtUptime = nil
@@ -167,6 +175,7 @@ public actor RobotSession {
                 handshake: handshake
             )
             deadMan.setArmed(false)
+            snapshot.safety.controlAuthority = .unknown
             if handshake.safetyState.emergencyStopIsLatched {
                 deadMan.emergencyStop()
             }
@@ -207,6 +216,9 @@ public actor RobotSession {
 
         let activeTransport = transport
         deadMan.setArmed(false)
+        motionAuthorityTimeoutTask?.cancel()
+        motionAuthorityTimeoutTask = nil
+        snapshot.safety.controlAuthority = .unknown
         synchronizeSafetyState(inhibitReason: .disconnected)
         publish()
         if snapshot.connection.isReady {
@@ -257,6 +269,7 @@ public actor RobotSession {
         disconnectTask = nil
         disconnectOperationID = nil
         snapshot.connection = .disconnected
+        snapshot.safety.controlAuthority = .unknown
         synchronizeSafetyState(inhibitReason: .disconnected)
         publish()
     }
@@ -265,22 +278,37 @@ public actor RobotSession {
         guard snapshot.connection.isReady else { return }
 
         if !armed {
+            motionAuthorityTimeoutTask?.cancel()
+            motionAuthorityTimeoutTask = nil
             await requestPriorityArmHoldsIgnoringFailure(reason: "drive_control_disarmed")
             deadMan.setArmed(false)
             deadMan.invalidateInput(reason: .operatorDisarmed)
+            snapshot.safety.controlAuthority = .unknown
+            synchronizeSafetyState(inhibitReason: .operatorDisarmed)
+            publish()
+        } else {
+            guard snapshot.safety.controlAuthority != .requesting,
+                  snapshot.safety.controlAuthority != .granted else { return }
+            deadMan.setArmed(false)
+            deadMan.invalidateInput(reason: .operatorDisarmed)
+            snapshot.safety.controlAuthority = .requesting
             synchronizeSafetyState(inhibitReason: .operatorDisarmed)
             publish()
         }
 
         do {
             try await send(.setArmed(armed))
-            if armed {
-                deadMan.setArmed(true)
-                deadMan.invalidateInput(reason: .deadManReleased)
-                synchronizeSafetyState(inhibitReason: .deadManReleased)
-                publish()
+            if armed, snapshot.safety.controlAuthority == .requesting {
+                scheduleMotionAuthorityTimeout()
             }
         } catch {
+            if armed {
+                motionAuthorityTimeoutTask?.cancel()
+                motionAuthorityTimeoutTask = nil
+                snapshot.safety.controlAuthority = .unknown
+                synchronizeSafetyState(inhibitReason: .transportFailure)
+                publish()
+            }
             handleSendFailure(error)
         }
     }
@@ -321,7 +349,10 @@ public actor RobotSession {
     }
 
     public func emergencyStop() async {
+        motionAuthorityTimeoutTask?.cancel()
+        motionAuthorityTimeoutTask = nil
         deadMan.emergencyStop()
+        snapshot.safety.controlAuthority = .unknown
         synchronizeSafetyState(inhibitReason: .emergencyStop)
         publish()
 
@@ -1179,12 +1210,23 @@ public actor RobotSession {
                 deadMan.setArmed(false)
                 deadMan.invalidateInput(reason: reason)
             }
+            snapshot.safety.isArmed = deadMan.isArmed
             snapshot.safety.inhibitReason = reason
         case .armedChanged(let armed):
-            if !armed {
+            motionAuthorityTimeoutTask?.cancel()
+            motionAuthorityTimeoutTask = nil
+            if armed {
+                deadMan.setArmed(true)
+                deadMan.invalidateInput(reason: .deadManReleased)
+                snapshot.safety.controlAuthority = .granted
+                snapshot.safety.inhibitReason = .deadManReleased
+            } else {
                 deadMan.setArmed(false)
+                deadMan.invalidateInput(reason: .operatorDisarmed)
+                snapshot.safety.controlAuthority = .notGranted
+                snapshot.safety.inhibitReason = .operatorDisarmed
             }
-            snapshot.safety.isArmed = armed && deadMan.isArmed
+            snapshot.safety.isArmed = armed
         case .emergencyStopChanged(let latched):
             if latched {
                 deadMan.emergencyStop()
@@ -1238,6 +1280,29 @@ public actor RobotSession {
         snapshot.safety.inhibitReason = inhibitReason
     }
 
+    private func scheduleMotionAuthorityTimeout() {
+        motionAuthorityTimeoutTask?.cancel()
+        let timeout = configuration.motionAuthorityRequestTimeout
+        motionAuthorityTimeoutTask = Task { [weak self] in
+            do {
+                try await ContinuousClock().sleep(for: timeout)
+            } catch {
+                return
+            }
+            await self?.expireMotionAuthorityRequest()
+        }
+    }
+
+    private func expireMotionAuthorityRequest() {
+        guard snapshot.safety.controlAuthority == .requesting else { return }
+        motionAuthorityTimeoutTask = nil
+        deadMan.setArmed(false)
+        deadMan.invalidateInput(reason: .operatorDisarmed)
+        snapshot.safety.controlAuthority = .unknown
+        synchronizeSafetyState(inhibitReason: .operatorDisarmed)
+        publish()
+    }
+
     private func handleSendFailure(_ error: Error) {
         if error is CancellationError { return }
 
@@ -1271,6 +1336,8 @@ public actor RobotSession {
         eventTask = nil
         commandTask = nil
         connectionAttemptID = nil
+        motionAuthorityTimeoutTask?.cancel()
+        motionAuthorityTimeoutTask = nil
         deadMan.setArmed(false)
         deadMan.invalidateInput(reason: inhibitReason)
         let failedTransport = transport
@@ -1296,6 +1363,7 @@ public actor RobotSession {
         snapshot.robotActions.pendingRequest = nil
         robotActionHelloSentAtUptime = nil
         snapshot.videoStreams = []
+        snapshot.safety.controlAuthority = .unknown
         cancelPendingVideoSubscriptions(with: failure)
         synchronizeSafetyState(
             inhibitReason: deadMan.emergencyStopIsLatched ? .emergencyStop : inhibitReason
