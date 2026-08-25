@@ -100,6 +100,35 @@ struct RobotActionProtocolTests {
         #expect(throws: (any Error).self) {
             try RobotActionWireCodec.decodeJSON(Data(unsafeStop.utf8))
         }
+
+        let startup = try RobotActionMessage(
+            kind: .actionRequest,
+            callID: "headless-startup-1",
+            senderID: cerebroID,
+            recipientID: controllerID,
+            sentAtMilliseconds: now,
+            expiresAtMilliseconds: now + 30_000,
+            action: .runStartupTest,
+            arguments: ["gesture": .string("startup.wake-both")],
+            state: .pending
+        )
+        #expect(startup.action == .runStartupTest)
+        #expect(throws: (any Error).self) {
+            try RobotActionMessage(
+                kind: .actionRequest,
+                callID: "headless-startup-unsafe",
+                senderID: cerebroID,
+                recipientID: controllerID,
+                sentAtMilliseconds: now,
+                expiresAtMilliseconds: now + 30_000,
+                action: .runStartupTest,
+                arguments: [
+                    "gesture": .string("startup.wake-both"),
+                    "positions_rad": .array([.number(0)])
+                ],
+                state: .pending
+            )
+        }
     }
 
     @Test("Oversized, malformed, and envelope-spoofed messages are rejected")

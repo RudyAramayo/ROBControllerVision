@@ -277,6 +277,15 @@ private struct RobotActionApprovalView: View {
                         .font(.caption.monospaced())
                         .textSelection(.enabled)
 
+                    if request.action == .runStartupTest && !model.pendingRobotActionIsExecuting {
+                        Label(
+                            "Approve starts the fixed physical test after an audible warning. Clear the full arm zone and keep the E-stop ready.",
+                            systemImage: "exclamationmark.triangle.fill"
+                        )
+                        .font(.caption.bold())
+                        .foregroundStyle(.orange)
+                    }
+
                     if model.pendingRobotActionIsExecuting {
                         Button(role: .destructive, action: model.cancelPendingRobotAction) {
                             Label("Cancel and Hold", systemImage: "hand.raised.fill")
@@ -284,7 +293,7 @@ private struct RobotActionApprovalView: View {
                         }
                         .buttonStyle(.borderedProminent)
 
-                        if request.action != .playGesture {
+                        if request.action != .playGesture && request.action != .runStartupTest {
                             HStack {
                                 Button("Confirm Completed", action: model.confirmPendingRobotActionCompleted)
                                     .buttonStyle(.borderedProminent)
@@ -344,6 +353,7 @@ private struct RobotActionApprovalView: View {
         case .requestPick: "Request Pick"
         case .navigateRelative: "Navigate Relative"
         case .stopMotion: "Stop Motion"
+        case .runStartupTest: "Run LIVE Startup Test"
         case nil: "Robot Action"
         }
     }

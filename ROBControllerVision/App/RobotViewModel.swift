@@ -516,9 +516,12 @@ final class RobotViewModel {
     }
 
     func approvePendingRobotAction() {
+        let isStartup = pendingRobotAction?.action == .runStartupTest
         respondToPendingRobotAction(
             .accepted,
-            detail: "Vision operator approved while physically supervising beside the droid."
+            detail: isStartup
+                ? "Vision operator authorized one immediate fixed LIVE startup run with the exclusion zone clear and physical E-stop ready."
+                : "Vision operator approved while physically supervising beside the droid."
         )
     }
 
@@ -559,9 +562,10 @@ final class RobotViewModel {
         Task { [weak self] in
             do {
                 try await session.respondToPendingRobotAction(state, detail: detail)
-                if state == .accepted, action == .playGesture {
+                if state == .accepted,
+                   action == .playGesture || action == .runStartupTest {
                     self?.robotActionStatusMessage =
-                        "Approved — Cerebro owns gesture execution and measured completion"
+                        "Approved — Cerebro owns execution and measured completion"
                 } else if state == .accepted {
                     self?.robotActionStatusMessage =
                         "Approved — supervise the action, then report completion or failure"

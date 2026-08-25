@@ -6,6 +6,7 @@ public enum RobotActionName: String, Codable, CaseIterable, Hashable, Sendable {
     case requestPick = "request_pick"
     case navigateRelative = "navigate_relative"
     case stopMotion = "stop_motion"
+    case runStartupTest = "run_startup_test"
 }
 
 public enum RobotActionMessageKind: String, Codable, Hashable, Sendable {
@@ -236,11 +237,13 @@ public struct RobotActionMessage: Codable, Hashable, Sendable, Identifiable {
                   let value = arguments["target_id"]?.stringValue,
                   !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                   value.count <= 256 else { return "Action requires a bounded target_id." }
-        case .playGesture:
+        case .playGesture, .runStartupTest:
             guard Set(arguments.keys) == ["gesture"],
                   let value = arguments["gesture"]?.stringValue,
                   !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                  value.count <= 128 else { return "play_gesture requires a gesture name." }
+                  value.count <= 128 else {
+                return "\(action.rawValue) requires a gesture name."
+            }
         case .navigateRelative:
             guard Set(arguments.keys) == ["distance_m", "yaw_rad", "speed_scale"],
                   let distance = arguments["distance_m"]?.numberValue,
