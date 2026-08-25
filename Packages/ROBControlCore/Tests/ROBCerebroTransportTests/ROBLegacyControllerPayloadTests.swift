@@ -22,6 +22,9 @@ struct ROBLegacyControllerPayloadTests {
         #expect(lines[6] == "touchPadL - 0.000000,0.375000")
         #expect(lines[7] == "touchPadR - 0.000000,0.125000")
         #expect(lines[9] == "tredBrakeLock=0")
+        #expect(envelope["controller.motion.version"] as? String == "1")
+        #expect(envelope["controller.motion.state"] as? String == "drive")
+        #expect(envelope["controller.motion.inhibit_reason"] == nil)
     }
 
     @Test("Independent tread demands clamp without cross-normalization")
@@ -47,6 +50,9 @@ struct ROBLegacyControllerPayloadTests {
         #expect(message.contains("touchPadR - 0.000000,-1000.000000"))
         #expect(message.contains("tredBrakeLock=1"))
         #expect(message.contains("roll=0.000000"))
+        #expect(envelope["controller.motion.version"] as? String == "1")
+        #expect(envelope["controller.motion.state"] as? String == "stopped")
+        #expect(envelope["controller.motion.inhibit_reason"] as? String == "userRequested")
     }
 
     @Test("Active head orientation is bounded and marked dead-man active")

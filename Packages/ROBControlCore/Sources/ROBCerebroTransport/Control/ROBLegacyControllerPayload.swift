@@ -77,7 +77,8 @@ enum ROBLegacyControllerPayload {
         senderID: UUID,
         brakeIsLocked: Bool,
         neckControlActive: Bool = false,
-        controllerPoses: ControllerPosePair? = nil
+        controllerPoses: ControllerPosePair? = nil,
+        inhibitReason: MotionInhibitReason? = nil
     ) throws -> Data {
         let left: Float
         let right: Float
@@ -111,25 +112,36 @@ enum ROBLegacyControllerPayload {
             "TEXT=",
         ].joined(separator: "\n")
 
+        var motionFields = [
+            "controller.motion.version": "1",
+            "controller.motion.state": brakeIsLocked ? "stopped" : "drive",
+        ]
+        if let inhibitReason {
+            motionFields["controller.motion.inhibit_reason"] = inhibitReason.rawValue
+        }
+
         return try archive(
             message: message,
             senderID: senderID,
             controllerPoses: controllerPoses,
             grippers: grippers,
-            torso: torso
+            torso: torso,
+            additionalFields: motionFields
         )
     }
 
     static func stoppedSnapshot(
         senderID: UUID,
-        controllerPoses: ControllerPosePair? = nil
+        controllerPoses: ControllerPosePair? = nil,
+        reason: MotionInhibitReason = .userRequested
     ) throws -> Data {
         try controllerSnapshot(
             motion: .stopped,
             senderID: senderID,
             brakeIsLocked: true,
             neckControlActive: false,
-            controllerPoses: controllerPoses
+            controllerPoses: controllerPoses,
+            inhibitReason: reason
         )
     }
 

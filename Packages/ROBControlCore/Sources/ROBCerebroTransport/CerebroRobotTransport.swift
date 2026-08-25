@@ -152,7 +152,10 @@ public actor CerebroRobotTransport: RobotTransport, RobotVideoDataTransport {
             await controlClient.liveSessionID() == sessionID
         {
             try? await controlClient.sendApplicationData(
-                ROBLegacyControllerPayload.stoppedSnapshot(senderID: credential.controllerID)
+                ROBLegacyControllerPayload.stoppedSnapshot(
+                    senderID: credential.controllerID,
+                    reason: .disconnected
+                )
             )
             try? await controlClient.sendApplicationData(
                 ROBLegacyControllerPayload.releaseMotionAuthority(senderID: credential.controllerID)
@@ -188,7 +191,7 @@ public actor CerebroRobotTransport: RobotTransport, RobotVideoDataTransport {
             )
 
         case .setArmed(false):
-            try await sendStoppedAndReleaseAuthority()
+            try await sendStoppedAndReleaseAuthority(reason: .operatorDisarmed)
 
         case .drive(let motion, let camera, let grippers, let torso, let controllerPoses):
             try await controlClient.sendApplicationData(
@@ -204,16 +207,17 @@ public actor CerebroRobotTransport: RobotTransport, RobotVideoDataTransport {
                 )
             )
 
-        case .stop(_, let controllerPoses):
+        case .stop(let reason, let controllerPoses):
             try await controlClient.sendApplicationData(
                 ROBLegacyControllerPayload.stoppedSnapshot(
                     senderID: credential.controllerID,
-                    controllerPoses: controllerPoses
+                    controllerPoses: controllerPoses,
+                    reason: reason
                 )
             )
 
         case .emergencyStop:
-            try await sendStoppedAndReleaseAuthority()
+            try await sendStoppedAndReleaseAuthority(reason: .emergencyStop)
 
         case .resetEmergencyStop:
             // Cerebro's established controller payload has no remote physical-E-stop reset.
@@ -357,9 +361,12 @@ public actor CerebroRobotTransport: RobotTransport, RobotVideoDataTransport {
         await client.closeVideoDataChannel(id)
     }
 
-    private func sendStoppedAndReleaseAuthority() async throws {
+    private func sendStoppedAndReleaseAuthority(reason: MotionInhibitReason) async throws {
         try await controlClient.sendApplicationData(
-            ROBLegacyControllerPayload.stoppedSnapshot(senderID: credential.controllerID)
+            ROBLegacyControllerPayload.stoppedSnapshot(
+                senderID: credential.controllerID,
+                reason: reason
+            )
         )
         try await controlClient.sendApplicationData(
             ROBLegacyControllerPayload.releaseMotionAuthority(senderID: credential.controllerID)

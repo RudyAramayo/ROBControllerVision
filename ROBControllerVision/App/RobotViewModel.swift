@@ -75,6 +75,9 @@ final class RobotViewModel {
     @ObservationIgnored private let session: RobotSession
     @ObservationIgnored private let simulator: SimulatedRobotEndpoint
     @ObservationIgnored private let pairingStore: ROBCerebroPairingStore
+    @ObservationIgnored private let controllerInputContinuation:
+        AsyncStream<OperatorControlSample>.Continuation
+    @ObservationIgnored private var controllerInputForwardingTask: Task<Void, Never>?
     @ObservationIgnored private var updatesTask: Task<Void, Never>?
     @ObservationIgnored private var actionTask: Task<Void, Never>?
     @ObservationIgnored private var actionID: UUID?
@@ -173,6 +176,9 @@ final class RobotViewModel {
         videoPipeline: VideoPipelineCoordinator = VideoPipelineCoordinator(),
         pairingStore: ROBCerebroPairingStore = ROBCerebroPairingStore()
     ) {
+        let controllerInputChannel = AsyncStream<OperatorControlSample>.makeStream(
+            bufferingPolicy: .bufferingNewest(1)
+        )
         self.session = session
         self.simulator =
             simulator
@@ -182,6 +188,7 @@ final class RobotViewModel {
         self.insta360VideoPipeline = VideoPipelineCoordinator(capturesDecodedFrames: true)
         self.speechInput = VisionSpeechInput()
         self.pairingStore = pairingStore
+        self.controllerInputContinuation = controllerInputChannel.continuation
         self.gameController = GameControllerInput()
         self.headOrientation = HeadOrientationInput()
         self.speechInput.onTranscript = { [weak self] transcript, isFinal in
@@ -197,10 +204,28 @@ final class RobotViewModel {
         self.headOrientation.onSample = { [weak self] sample in
             self?.acceptHeadOrientation(sample)
         }
+        let controllerInputStream = controllerInputChannel.stream
+        controllerInputForwardingTask = Task {
+            let clock = ContinuousClock()
+            for await sample in controllerInputStream {
+                guard !Task.isCancelled else { return }
+                await session.updateOperatorInput(sample)
+                // Pose tracking can publish far faster than the 10 Hz command loop.
+                // Cap forwarding at 50 Hz while buffering only the newest value so
+                // old tread demands can never build an actuator-visible backlog.
+                do {
+                    try await clock.sleep(for: .milliseconds(20))
+                } catch {
+                    return
+                }
+            }
+        }
         reloadPairingStatus(selectCerebroWhenPaired: true)
     }
 
     deinit {
+        controllerInputContinuation.finish()
+        controllerInputForwardingTask?.cancel()
         updatesTask?.cancel()
         actionTask?.cancel()
         videoActionTask?.cancel()
@@ -1498,6 +1523,9 @@ final class RobotViewModel {
             return
         }
         headOrientation.setDeadManHeld(sample.isConnected && sample.deadManIsHeld)
+        // Publish the disconnected sample too. Its released dead-man and zero
+        // treads replace any buffered drive value before the explicit inhibit.
+        sendCombinedControllerSample()
         guard sample.isConnected else {
             let session = session
             Task {
@@ -1505,8 +1533,6 @@ final class RobotViewModel {
             }
             return
         }
-
-        sendCombinedControllerSample()
     }
 
     private func submitGripperTriggerEdges(from sample: GameControllerSample) {
@@ -1746,10 +1772,7 @@ final class RobotViewModel {
             controllerPoses: sample.controllerPoses,
             deadManIsHeld: sample.deadManIsHeld
         )
-        let session = session
-        Task {
-            await session.updateOperatorInput(controlSample)
-        }
+        controllerInputContinuation.yield(controlSample)
     }
 
     private func refreshStatusMessage(from snapshot: RobotSessionSnapshot) {
