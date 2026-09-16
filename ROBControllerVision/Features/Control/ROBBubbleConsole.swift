@@ -12,7 +12,8 @@ import ROBControlCore
     @Published var selectedPoint: CGPoint?
     @Published var pan = 4000.0
     @Published var tilt = 8000.0
-    @Published var error = "Connect to Cerebro and open the bubble camera"
+    @Published var error = "Connect to Cerebro to use the bubble controls"
+    @Published var simulationOnly = false
     @Published var useControllerButtons = false
     @Published var isVisible = false
     @Published var sceneActive = true
@@ -22,40 +23,72 @@ import ROBControlCore
     private var lastReceived = 0.0
     private var lastFrameReceived = 0.0
     private var previousButtons = (false, false)
+    private let uptime: () -> Double
 
-    var fresh: Bool { ProcessInfo.processInfo.systemUptime - lastReceived < 1.5 }
+    init(uptime: @escaping () -> Double = { ProcessInfo.processInfo.systemUptime }) { self.uptime = uptime }
+    var fresh: Bool { status != nil && uptime() - lastReceived < 1.5 }
     var armed: Bool { fresh && status?.armed == true }
+    var canMove: Bool { fresh && (!allowsAuthorization || (status?.mountAuthorized ?? status?.armed) == true) }
+    var canRunMotors: Bool { fresh && (!allowsAuthorization ? status?.cooldownSeconds == 0 : armed) }
+    var canAuthorize: Bool { fresh && !armed && (status?.cooldownSeconds ?? 1) == 0 }
+    var canEnableMount: Bool { fresh && !canMove }
+    var outputMode: String {
+        guard let status else { return "CONNECTING" }
+        if status.motorsLive == true { return status.mountLive == true ? "LIVE MOUNT + MOTORS" : "LIVE MOTORS" }
+        if status.mountLive == true { return "LIVE TILT / PAN" }
+        return status.dryRun ? (simulationOnly ? "DRY RUN" : "READY TO ENABLE") : "LIVE OUTPUTS"
+    }
+    var cameraPlaceholder: String { fresh ? "Waiting for face-camera RGB" : "Waiting for Cerebro connection" }
+    func authorize() {
+        guard canAuthorize else { return }
+        command(simulationOnly ? .authorize : .authorizeMotors)
+    }
+    func enableMount() {
+        guard canEnableMount else { return }
+        command(simulationOnly ? .authorize : .authorizeMount)
+    }
     func consume(_ state: ROBBubbleStatus) {
-        status = state; lastReceived = ProcessInfo.processInfo.systemUptime; error = ""
+        lastReceived = uptime(); status = state; error = ""
         if let jpeg = state.jpeg, let id = state.frameID {
             imageData = jpeg; frameID = id; lastFrameReceived = lastReceived
         }
     }
-    func command(_ operation: ROBBubbleOperation) { send?(.init(operation)) }
+    func command(_ operation: ROBBubbleOperation) {
+        guard let send else { error = "Waiting for the Cerebro control connection"; return }
+        send(.init(operation))
+    }
+    func disconnected() {
+        status = nil; imageData = nil; frameID = nil; selectedPoint = nil
+        lastReceived = 0; lastFrameReceived = 0; simulationOnly = false
+        useControllerButtons = false
+        error = "Connect to an authenticated Cerebro session"
+    }
     func poll() {
         guard isVisible, sceneActive else { return }
-        command(.heartbeat); command(.preview)
         if !fresh {
             status = nil; error = "Waiting for fresh bubble status from Cerebro"
         }
-        if ProcessInfo.processInfo.systemUptime - lastFrameReceived > 2 {
+        if uptime() - lastFrameReceived > 2 {
             imageData = nil; frameID = nil
         }
+        // Preserve a specific send failure (for example, not paired) instead
+        // of immediately overwriting it with a generic camera/status message.
+        command(.heartbeat); command(.preview)
     }
     func setVisible(_ visible: Bool) {
         isVisible = visible; visibilityChanged?(visible)
-        if visible { poll() } else { command(.stop); useControllerButtons = false }
+        if visible { poll() } else { command(.stop); useControllerButtons = false; simulationOnly = false }
     }
     func suspend() {
         command(.stop); sceneActive = false; status = nil; useControllerButtons = false
     }
     func select(u: Double, v: Double) {
-        guard armed, let frameID, ProcessInfo.processInfo.systemUptime - lastFrameReceived <= 2 else { return }
+        guard canMove, let frameID, uptime() - lastFrameReceived <= 2 else { return }
         selectedPoint = CGPoint(x: u, y: v)
         send?(.init(.aim, frameID: frameID, u: u, v: v))
     }
     func applyManual() {
-        guard armed else { return }
+        guard canMove else { return }
         send?(.init(.manual, pan: Int(pan.rounded()), tilt: Int(tilt.rounded())))
     }
     func controllerButtons(spin: Bool, blower: Bool) {
@@ -73,33 +106,51 @@ struct ROBBubbleConsole: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                HStack {
+                VStack(alignment: .leading, spacing: 4) {
                     Label("Bubble targeting", systemImage: "bubbles.and.sparkles")
                         .font(.title2.bold())
-                    Spacer()
-                    Text(model.status?.dryRun == false ? "LIVE OUTPUTS" : "DRY RUN")
+                    Text(model.outputMode)
                         .font(.caption.bold()).foregroundStyle(model.status?.dryRun == false ? .orange : .cyan)
                 }
                 Text(model.error.isEmpty ? model.status?.detail ?? "" : model.error)
                     .font(.callout).foregroundStyle(.secondary)
                 camera
+                Text("Face-camera RGB • distance measured by aligned depth")
+                    .font(.caption).foregroundStyle(.secondary)
+                if model.fresh && model.status?.depthReady == false {
+                    Text("Depth ranging is unavailable. Authorization and manual Tilt/Pan still work; camera targeting needs a distance measurement.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 Text(model.status?.targetDescription ?? "Look and pinch, or tap a point in the camera to aim.")
                     .font(.callout.monospacedDigit())
-                HStack {
-                    Label(model.armed ? "Authorized" : "Disarmed", systemImage: model.armed ? "lock.open" : "lock")
-                    Spacer()
+                VStack(alignment: .leading, spacing: 4) {
+                    Label(model.armed ? "Motors authorized" : "Motors disarmed", systemImage: model.armed ? "lock.open" : "lock")
                     Text(String(format: "Work %.0f s • Cooldown %.0f s", model.status?.remainingSeconds ?? 0,
                                 model.status?.cooldownSeconds ?? 0)).monospacedDigit()
                 }.font(.callout)
+                if model.allowsAuthorization && model.status?.mountLive == false && model.status?.motorsLive == false {
+                    Toggle("Simulation only", isOn: $model.simulationOnly)
+                        .disabled(model.armed || model.canMove)
+                    Text("Enable Tilt/Pan to move the servos. Authorize bubbles separately to use the fan and blower. Neither needs a camera connection.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                if model.simulationOnly {
+                    Text("Dry run simulates movement and motors; it does not move the machine.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                if model.allowsAuthorization {
+                    HStack {
+                        Button(model.canMove ? "Tilt/Pan enabled" : "Enable Tilt/Pan") { model.enableMount() }
+                            .disabled(!model.canEnableMount)
+                        Button(model.simulationOnly ? "Authorize simulation" : "Authorize bubbles") { model.authorize() }
+                            .disabled(!model.canAuthorize)
+                    }.buttonStyle(.borderedProminent)
+                } else {
+                    Text("Cerebro · direct local control").font(.caption)
+                }
                 HStack {
-                    if model.allowsAuthorization {
-                        Button("Authorize bubbles") { model.command(.authorize) }
-                            .disabled(!model.fresh || model.armed || (model.status?.cooldownSeconds ?? 1) > 0)
-                    } else {
-                        Text("Authorize in ROBController or Vision Pro").font(.caption)
-                    }
                     Button("STOP", role: .destructive) { model.command(.stop) }
-                    Button("Stow laser") { model.command(.stow) }
+                    Button("Stow laser") { model.command(.stow) }.disabled(!model.canMove)
                 }.buttonStyle(.borderedProminent)
                 Button("Release Tilt/Pan · stop servo pulses") { model.command(.releaseMount) }
                     .font(.callout)
@@ -110,18 +161,18 @@ struct ROBBubbleConsole: View {
                     Button(model.status?.blower == true ? "Stop bubbles" : "Start bubbles") {
                         model.command(model.status?.blower == true ? .blowerOff : .blowerOn)
                     }.disabled(model.status?.spinReady != true && model.status?.blower != true)
-                }.buttonStyle(.bordered).disabled(!model.armed)
+                }.buttonStyle(.bordered).disabled(!model.canRunMotors)
                 HStack {
                     Button("Pulse · 3 s / 5 s") { model.command(.pulse) }
                     Button("Continuous · timed") { model.command(.continuous) }
-                }.buttonStyle(.bordered).disabled(!model.armed)
+                }.buttonStyle(.bordered).disabled(!model.canRunMotors)
                 Text("0.5 s relay settling • 2 min maximum working time • 1 min fully off to cool. Continuous mode stops at the limit and requires fresh authorization.")
                     .font(.caption).foregroundStyle(.secondary)
                 DisclosureGroup("Manual Tilt / Pan") {
                     VStack {
                         HStack { Text("Tilt \(Int(model.tilt))"); Slider(value: $model.tilt, in: 4000...8000, step: 1) }
                         HStack { Text("Pan \(Int(model.pan))"); Slider(value: $model.pan, in: 4000...8000, step: 1) }
-                        Button("Apply mount position") { model.applyManual() }.disabled(!model.armed)
+                        Button("Apply mount position") { model.applyManual() }.disabled(!model.canMove)
                         Text("Startup rest: Tilt 8000 · Pan 4000 · Fan 4000 · Bubbles 4000")
                             .font(.caption).foregroundStyle(.secondary)
                     }.padding(.top, 8)
@@ -162,7 +213,7 @@ struct ROBBubbleConsole: View {
                                         }
                                     }
                                 }
-                            }.disabled(!model.armed)
+                            }.disabled(!model.canMove)
                             #else
                             Color.clear.contentShape(Rectangle()).gesture(
                                 DragGesture(minimumDistance: 0).onEnded { event in
@@ -182,7 +233,7 @@ struct ROBBubbleConsole: View {
             } else {
                 RoundedRectangle(cornerRadius: 14).fill(.black.opacity(0.5))
                     .aspectRatio(16.0 / 9.0, contentMode: .fit)
-                    .overlay { Label("Waiting for depth camera", systemImage: "camera.viewfinder") }
+                    .overlay { Label(model.cameraPlaceholder, systemImage: "camera.viewfinder") }
             }
         }.clipShape(RoundedRectangle(cornerRadius: 14))
     }

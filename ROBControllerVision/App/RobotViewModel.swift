@@ -209,7 +209,10 @@ final class RobotViewModel {
             self?.bubbleConsole.controllerButtons(spin: spin, blower: blower)
         }
         self.bubbleConsole.send = { [weak self] command in
-            guard let self, let transport = self.bubbleTransport else { return }
+            guard let self else { return }
+            guard let transport = self.bubbleTransport else {
+                self.bubbleConsole.error = "Connect to an authenticated Cerebro session"; return
+            }
             guard command.operation == .stop || (self.sceneIsActive && !self.snapshot.safety.emergencyStopIsLatched) else { return }
             Task { [weak self] in
                 do { try await transport.sendBubble(command) }
@@ -446,7 +449,7 @@ final class RobotViewModel {
 
     func connectToSimulator() {
         bubbleConsole.command(.stop)
-        bubbleTask?.cancel(); bubbleTransport = nil; bubbleConsole.status = nil
+        bubbleTask?.cancel(); bubbleTransport = nil; bubbleConsole.disconnected()
         guard actionTask == nil else { return }
         statusMessage = "Connecting to ROB Simulator…"
         let session = session
@@ -462,7 +465,7 @@ final class RobotViewModel {
 
     func disconnect() {
         bubbleConsole.command(.stop)
-        bubbleTask?.cancel(); bubbleTransport = nil; bubbleConsole.status = nil
+        bubbleTask?.cancel(); bubbleTransport = nil; bubbleConsole.disconnected()
         endVirtualMotion()
         cancelArmMotionLocally()
         clearGripperInputTracking()

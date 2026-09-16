@@ -2,7 +2,7 @@ import Foundation
 
 // Kept byte-for-byte in Cerebro, ROBController, and ROBControlCore.
 public enum ROBBubbleOperation: String, Codable, Sendable {
-    case preview, heartbeat, authorize, stop, stow, releaseMount, aim, manual
+    case preview, heartbeat, authorize, authorizeMount, authorizeMotors, stop, stow, releaseMount, aim, manual
     case spinOn, spinOff, blowerOn, blowerOff, pulse, continuous, status
 }
 
@@ -37,16 +37,26 @@ public struct ROBBubbleStatus: Codable, Equatable, Sendable {
     public var targetDescription: String
     public var frameID: UUID?
     public var jpeg: Data?
+    /// Optional for compatibility with older consoles. These modes are independent.
+    public var mountLive: Bool?
+    public var motorsLive: Bool?
+    public var mountAuthorized: Bool?
+    /// Ranging availability; the preview itself is always the face-camera RGB image.
+    public var depthReady: Bool?
 
     public init(detail: String, armed: Bool, dryRun: Bool, spin: Bool, blower: Bool,
                 spinReady: Bool, mode: String, remainingSeconds: Double,
                 cooldownSeconds: Double, pan: Int, tilt: Int, targetDescription: String,
-                frameID: UUID? = nil, jpeg: Data? = nil) {
+                frameID: UUID? = nil, jpeg: Data? = nil,
+                mountLive: Bool? = nil, motorsLive: Bool? = nil, depthReady: Bool? = nil,
+                mountAuthorized: Bool? = nil) {
         self.detail = detail; self.armed = armed; self.dryRun = dryRun
         self.spin = spin; self.blower = blower; self.spinReady = spinReady; self.mode = mode
         self.remainingSeconds = remainingSeconds; self.cooldownSeconds = cooldownSeconds
         self.pan = pan; self.tilt = tilt; self.targetDescription = targetDescription
         self.frameID = frameID; self.jpeg = jpeg
+        self.mountLive = mountLive; self.motorsLive = motorsLive; self.depthReady = depthReady
+        self.mountAuthorized = mountAuthorized
     }
 }
 
