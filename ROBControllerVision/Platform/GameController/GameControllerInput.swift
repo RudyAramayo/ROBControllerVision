@@ -79,6 +79,7 @@ final class GameControllerInput: NSObject {
     private(set) var lastEventDescription = "Hold both VR grip buttons to enable control"
 
     @ObservationIgnored var onSample: ((GameControllerSample) -> Void)?
+    @ObservationIgnored var onBubbleButtons: ((Bool, Bool) -> Void)?
     @ObservationIgnored private var controllers: [ObjectIdentifier: GCController] = [:]
     @ObservationIgnored private var controllerStates: [ObjectIdentifier: ControllerState] = [:]
     @ObservationIgnored private var isStarted = false
@@ -291,6 +292,12 @@ final class GameControllerInput: NSObject {
     }
 
     private func publishCombinedSample() {
+        // Face buttons are independent of the existing grip dead-man and gripper triggers.
+        let profiles = controllers.values.map(\.physicalInputProfile)
+        onBubbleButtons?(
+            profiles.contains { $0.buttons[GCInputButtonX]?.isPressed == true },
+            profiles.contains { $0.buttons[GCInputButtonY]?.isPressed == true }
+        )
         var leftSpatialStick: Float = 0
         var rightSpatialStick: Float = 0
         var leftConventionalStick: Float = 0

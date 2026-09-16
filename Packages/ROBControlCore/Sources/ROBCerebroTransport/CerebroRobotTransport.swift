@@ -31,6 +31,26 @@ public actor CerebroRobotTransport: RobotTransport, RobotVideoDataTransport {
     private var videoReconnectAttempt = 0
     private var activeVideoStreams: Set<VideoSubscriptionID> = []
     private var eventSubscribers: [UUID: AsyncStream<RobotEvent>.Continuation] = [:]
+    private var bubbleSubscriber: AsyncStream<ROBBubbleStatus>.Continuation?
+    private var bubbleSequence: UInt64 = 0
+    private var lastBubbleStatusSequence: UInt64 = 0
+
+    public func bubbleEvents() -> AsyncStream<ROBBubbleStatus> {
+        bubbleSubscriber?.finish()
+        let pair = AsyncStream<ROBBubbleStatus>.makeStream(bufferingPolicy: .bufferingNewest(4))
+        bubbleSubscriber = pair.continuation
+        return pair.stream
+    }
+
+    public func sendBubble(_ command: ROBBubbleCommand) async throws {
+        guard let activeSessionID, await controlClient.liveSessionID() == activeSessionID else {
+            throw RobotTransportError.notConnected
+        }
+        bubbleSequence &+= 1
+        let message = ROBBubbleMessage(controllerID: credential.controllerID, sessionID: activeSessionID,
+            sequence: bubbleSequence, command: command)
+        try await controlClient.sendApplicationData(ROBBubbleProtocol.encode(message))
+    }
 
     public init(credential: ROBCerebroCredential) {
         self.credential = credential
@@ -109,6 +129,8 @@ public actor CerebroRobotTransport: RobotTransport, RobotVideoDataTransport {
             try ensureCurrentConnectionAttempt(attemptID)
 
             activeSessionID = sessionID
+            lastBubbleStatusSequence = 0
+            bubbleSequence = 0
             lastCommandSequence = 0
             connectionAttemptID = nil
             if videoClient == nil {
@@ -553,6 +575,18 @@ public actor CerebroRobotTransport: RobotTransport, RobotVideoDataTransport {
             publish(.disconnected(reason: error?.localizedDescription ?? "Cerebro disconnected."))
 
         case .applicationData(let data):
+            if ROBBubbleProtocol.claims(data) {
+                guard let message = try? ROBBubbleProtocol.decode(data),
+                      message.command.operation == .status,
+                      message.controllerID == credential.controllerID,
+                      message.sessionID == activeSessionID,
+                      ROBBubbleProtocol.isFresh(message, now: Date().timeIntervalSince1970),
+                      message.sequence > lastBubbleStatusSequence,
+                      let status = message.status else { return }
+                lastBubbleStatusSequence = message.sequence
+                bubbleSubscriber?.yield(status)
+                return
+            }
             if let authority = ROBLegacyControllerPayload.decodeControlAuthorityState(data) {
                 publish(.safety(.armedChanged(
                     authority.isOwned(by: credential.controllerID)

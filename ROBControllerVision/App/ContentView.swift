@@ -41,6 +41,18 @@ struct ContentView: View {
         .onAppear {
             receivesControllerEvents = true
         }
+        .toolbar {
+            Button { model.showsBubbleControlSheet = true } label: {
+                Label("Bubbles", systemImage: "bubbles.and.sparkles")
+            }
+        }
+        .sheet(isPresented: $model.showsBubbleControlSheet) {
+            ROBBubbleConsole(model: model.bubbleConsole)
+                .frame(width: 840, height: 820)
+                .toolbar {
+                    Button("Close") { model.showsBubbleControlSheet = false }
+                }
+        }
         #if DEBUG
             .task {
                 if ProcessInfo.processInfo.arguments.contains("--immersive-smoke-test") {

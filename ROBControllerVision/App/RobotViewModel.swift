@@ -56,6 +56,10 @@ final class RobotViewModel {
     var operatorTextDraft = ""
     var operatorTextMode: OperatorTextMode = .command
     var showsArmControlSheet = false
+    var showsBubbleControlSheet = false
+    let bubbleConsole = ROBBubbleConsoleModel()
+    @ObservationIgnored private var bubbleTransport: CerebroRobotTransport?
+    @ObservationIgnored private var bubbleTask: Task<Void, Never>?
     var selectedArm: RobotArmSide = .left
     var leftGripperForce = 5
     var rightGripperForce = 5
@@ -200,6 +204,17 @@ final class RobotViewModel {
         }
         self.gameController.onSample = { [weak self] sample in
             self?.acceptGameController(sample)
+        }
+        self.gameController.onBubbleButtons = { [weak self] spin, blower in
+            self?.bubbleConsole.controllerButtons(spin: spin, blower: blower)
+        }
+        self.bubbleConsole.send = { [weak self] command in
+            guard let self, let transport = self.bubbleTransport else { return }
+            guard command.operation == .stop || (self.sceneIsActive && !self.snapshot.safety.emergencyStopIsLatched) else { return }
+            Task { [weak self] in
+                do { try await transport.sendBubble(command) }
+                catch { self?.bubbleConsole.error = error.localizedDescription }
+            }
         }
         self.headOrientation.onSample = { [weak self] sample in
             self?.acceptHeadOrientation(sample)
@@ -404,6 +419,15 @@ final class RobotViewModel {
             }
             pairedCredential = credential
             let transport = CerebroRobotTransport(credential: credential)
+            bubbleTransport = transport
+            bubbleTask?.cancel()
+            bubbleTask = Task { [weak self] in
+                let stream = await transport.bubbleEvents()
+                for await status in stream {
+                    guard !Task.isCancelled else { return }
+                    self?.bubbleConsole.consume(status)
+                }
+            }
             statusMessage = "Discovering paired Cerebro services…"
             let session = session
             let id = UUID()
@@ -421,6 +445,8 @@ final class RobotViewModel {
     }
 
     func connectToSimulator() {
+        bubbleConsole.command(.stop)
+        bubbleTask?.cancel(); bubbleTransport = nil; bubbleConsole.status = nil
         guard actionTask == nil else { return }
         statusMessage = "Connecting to ROB Simulator…"
         let session = session
@@ -435,6 +461,8 @@ final class RobotViewModel {
     }
 
     func disconnect() {
+        bubbleConsole.command(.stop)
+        bubbleTask?.cancel(); bubbleTransport = nil; bubbleConsole.status = nil
         endVirtualMotion()
         cancelArmMotionLocally()
         clearGripperInputTracking()
@@ -483,6 +511,7 @@ final class RobotViewModel {
     }
 
     func emergencyStop() {
+        bubbleConsole.command(.stop)
         endVirtualMotion()
         cancelArmMotionLocally()
         clearGripperInputTracking()
@@ -1480,6 +1509,7 @@ final class RobotViewModel {
     }
 
     func setSceneActive(_ active: Bool, preservingVideo: Bool = false) {
+        if active { bubbleConsole.sceneActive = true } else { bubbleConsole.suspend() }
         sceneIsActive = active
         if active {
             videoPresentationIsActive = true
@@ -1513,6 +1543,10 @@ final class RobotViewModel {
     }
 
     private func acceptGameController(_ sample: GameControllerSample) {
+        if !sample.isConnected && bubbleConsole.useControllerButtons {
+            bubbleConsole.command(.stop)
+            bubbleConsole.useControllerButtons = false
+        }
         guard sceneIsActive else { return }
         latestGameControllerSample = sample
         latestGameControllerSampleAtUptime = ProcessInfo.processInfo.systemUptime
