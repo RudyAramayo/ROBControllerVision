@@ -125,7 +125,7 @@ struct ROBBubbleConsole: View {
                     .font(.callout.monospacedDigit())
                 VStack(alignment: .leading, spacing: 4) {
                     Label(model.armed ? "Motors authorized" : "Motors disarmed", systemImage: model.armed ? "lock.open" : "lock")
-                    Text(String(format: "Work %.0f s • Cooldown %.0f s", model.status?.remainingSeconds ?? 0,
+                    Text(String(format: "Bubbles %.0f s • Cooldown %.0f s", model.status?.remainingSeconds ?? 0,
                                 model.status?.cooldownSeconds ?? 0)).monospacedDigit()
                 }.font(.callout)
                 if model.allowsAuthorization && model.status?.mountLive == false && model.status?.motorsLive == false {
@@ -166,7 +166,7 @@ struct ROBBubbleConsole: View {
                     Button("Pulse · 3 s / 5 s") { model.command(.pulse) }
                     Button("Continuous · timed") { model.command(.continuous) }
                 }.buttonStyle(.bordered).disabled(!model.canRunMotors)
-                Text("0.5 s relay settling • 2 min maximum working time • 1 min fully off to cool. Continuous mode stops at the limit and requires fresh authorization.")
+                Text("Fan-only operation does not use bubble time. Bubbles have a 2 min working limit, then 1 min off to cool. Relay settling takes 0.5 s. Continuous mode stops at the limit and requires fresh authorization.")
                     .font(.caption).foregroundStyle(.secondary)
                 DisclosureGroup("Manual Tilt / Pan") {
                     VStack {
