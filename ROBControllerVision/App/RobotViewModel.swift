@@ -216,9 +216,9 @@ final class RobotViewModel {
                 self.sendOperatorText(as: self.operatorTextMode)
             }
         }
-        self.gameController.onShadowTracking = { [weak self] sample in
+        self.gameController.onShadowTracking = { [weak self] arm, sample in
             guard let self, self.sceneIsActive, !self.snapshot.safety.emergencyStopIsLatched else { return }
-            self.shadowPreview.tracking(sample)
+            self.shadowPreview.tracking(sample, arm: arm)
         }
         self.shadowPreview.send = { [weak self] command in
             guard let transport = self?.bubbleTransport else { throw RobotTransportError.notConnected }
@@ -1592,7 +1592,8 @@ final class RobotViewModel {
             guard !snapshot.safety.emergencyStopIsLatched, !snapshot.safety.isArmed, !hasAnyActiveArmControl else {
                 shadowPreview.suspend(); return
             }
-            shadowPreview.grip(sample.leftSpatialGripIsHeld, connected: sample.leftSpatialControllerIsConnected)
+            shadowPreview.grip(sample.leftSpatialGripIsHeld, connected: sample.leftSpatialControllerIsConnected, arm: .left)
+            shadowPreview.grip(sample.rightSpatialGripIsHeld, connected: sample.rightSpatialControllerIsConnected, arm: .right)
             headOrientation.setDeadManHeld(false)
             return
         }

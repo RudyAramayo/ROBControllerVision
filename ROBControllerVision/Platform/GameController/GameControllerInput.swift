@@ -78,7 +78,7 @@ final class GameControllerInput: NSObject {
     private(set) var poseTrackingStatus = "Spatial pose tracking has not started"
     private(set) var lastEventDescription = "Hold both VR grip buttons to enable control"
 
-    @ObservationIgnored var onShadowTracking: ((ROBShadowTrackingSample?) -> Void)?
+    @ObservationIgnored var onShadowTracking: ((ROBShadowArm, ROBShadowTrackingSample?) -> Void)?
     @ObservationIgnored var onSample: ((GameControllerSample) -> Void)?
     @ObservationIgnored var onBubbleButtons: ((Bool, Bool) -> Void)?
     @ObservationIgnored private var controllers: [ObjectIdentifier: GCController] = [:]
@@ -394,7 +394,11 @@ final class GameControllerInput: NSObject {
                 self?.setSide(chirality, for: id)
             }
             tracker.onShadowPose = { [weak self] chirality, sample in
-                if chirality == .left { self?.onShadowTracking?(sample) }
+                switch chirality {
+                case .left: self?.onShadowTracking?(.left, sample)
+                case .right: self?.onShadowTracking?(.right, sample)
+                default: break
+                }
             }
             tracker.onPose = { [weak self] chirality, pose in
                 self?.applyTrackedPose(pose, chirality: chirality)

@@ -218,4 +218,4 @@ The pipeline forces a keyframe on start and recovery and stops on consumer cance
 
 ## Shadow planning lane
 
-`rob-shadow-ik/1` is a separate authenticated preview channel from `CerebroRobotTransport` to the Mac Drake worker. The [Shadow IK panel](shadow-ik.md) consumes controller poses while physical input paths are inhibited and displays reference versus proposed FK frames. It does not use `RobotCommand.armTarget`, arm authority or the Amber gateway.
+`rob-shadow-ik/2` is a separate authenticated preview channel from `CerebroRobotTransport` to the Mac Drake worker. The [Shadow IK panel](shadow-ik.md) consumes controller poses while physical input paths are inhibited and displays scan, observed and proposed FK frames with markerless/clearance status. It does not use `RobotCommand.armTarget`, arm authority or the Amber gateway.

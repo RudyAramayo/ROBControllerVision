@@ -17,19 +17,27 @@ struct ROBShadowPreviewPanel: View {
                 Button { dismiss() } label: { Image(systemName: "xmark") }
                     .accessibilityLabel("Close shadow preview")
             }
-            Text("Left arm R-11 • base, torso and right arm fixed")
-                .font(.subheadline).foregroundStyle(.secondary)
+            HStack {
+                Picker("Align / XYZ arm", selection: $model.selectedArm) {
+                    Text("Left · R-11").tag(ROBShadowArm.left)
+                    Text("Right · L-10").tag(ROBShadowArm.right)
+                }.pickerStyle(.segmented).frame(width: 330)
+                Toggle("Require live vision", isOn: $model.requireVision).toggleStyle(.button)
+                    .disabled(model.response != nil || model.waiting)
+                Text("Base and torso held").font(.caption).foregroundStyle(.secondary)
+            }
             RealityView { content in
                 content.add(scene.root)
                 scene.update(model.response, sideView: sideView)
             } update: { _ in
                 scene.update(model.response, sideView: sideView)
             }
-            .frame(height: 355)
+            .frame(height: 300)
             .background(.black.opacity(0.2), in: RoundedRectangle(cornerRadius: 20))
             HStack(spacing: 22) {
                 Label("Scan estimate", systemImage: "circle.fill").foregroundStyle(.gray)
                 Label("IK ghost", systemImage: "circle.fill").foregroundStyle(.cyan)
+                Label("Observed arms", systemImage: "circle.fill").foregroundStyle(.green)
                 Label("Requested target", systemImage: "scope").foregroundStyle(.orange)
                 Spacer()
                 Toggle("Side view", isOn: $sideView).toggleStyle(.button)
@@ -43,7 +51,7 @@ struct ROBShadowPreviewPanel: View {
                     .disabled(model.waiting)
                 if model.waiting { ProgressView().controlSize(.small) }
             }
-            Text("Point the left controller along the direction you want to mean ROB’s forward, then align. Release and hold the left grip to move the ghost. Release to reposition your hand.")
+            Text("Select each arm and align its controller forward. Each grip moves its matching arm; release to reposition your hand. Both controllers can be used together. Live mode requires fresh, unambiguous observations of both arms.")
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             HStack {
@@ -59,7 +67,7 @@ struct ROBShadowPreviewPanel: View {
                     }
                 }
             }
-            Text("XYZ steps: \(model.precision ? "2" : "10") mm • provisional ±120° arm range • clearance and cable travel unverified")
+            Text("XYZ steps: \(model.precision ? "2" : "10") mm • centered ±120° • rigid scan clearance checked • cables and environment unverified")
                 .font(.caption2).foregroundStyle(.orange)
             if let response = model.response {
                 HStack {
@@ -68,8 +76,17 @@ struct ROBShadowPreviewPanel: View {
                         Text("Target error: \(error * 1000, specifier: "%0.2f") mm")
                     }
                     Spacer()
-                    Text("Scan reference · not live vision")
+                    Text(response.visionRequired ? "Live pose required" : "Scan rehearsal")
                 }.font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Vision: \(response.visionStatus) · \(response.visionDetail)")
+                    if let pair = response.collisionPair, let clearance = response.clearanceMeters {
+                        Text("Clearance: \(response.collisionStatus) · \(pair.joined(separator: " ↔ ")) · \(clearance * 1000, specifier: "%0.1f") mm (25 mm required)")
+                            .foregroundStyle(response.collisionStatus == "blocked" ? .orange : .secondary)
+                    } else {
+                        Text("Clearance: \(response.collisionStatus) · \(response.collisionDetail)")
+                    }
+                }.font(.caption2).fixedSize(horizontal: false, vertical: true)
             }
         }
         .padding(24)
@@ -127,12 +144,13 @@ struct ROBShadowPreviewPanel: View {
         let height = max(1, (response.referenceFrames + response.ghostFrames).map { $0.pose.position[2] }.max() ?? 1)
         root.scale = SIMD3(repeating: Float(0.16 / (height + 0.12)))
         for (prefix, frames, color) in [("reference", response.referenceFrames, UIColor.gray.withAlphaComponent(0.3)),
-                                        ("ghost", response.ghostFrames, UIColor.cyan.withAlphaComponent(0.75))] {
+                                        ("ghost", response.ghostFrames, UIColor.cyan.withAlphaComponent(0.75)),
+                                        ("observed", response.observedFrames, UIColor.green.withAlphaComponent(0.8))] {
             let poses = Dictionary(uniqueKeysWithValues: frames.map { ($0.name, $0.pose) })
             for side in ["left", "right"] {
                 let chain = ["base_link", "one_Link", "two_Link", "three_Link", "four_Link", "five_Link", "six_Link", "seven_Link", "tool"]
                     .compactMap { poses["\(side)_\($0)"].map(position) }
-                let armColor = side == "left" ? color : UIColor.gray.withAlphaComponent(0.3)
+                let armColor = color
                 for (i, point) in chain.enumerated() {
                     sphere("\(prefix)-\(side)-joint\(i)", at: point, radius: 0.017, color: armColor)
                     if i > 0 { line("\(prefix)-\(side)-link\(i)", chain[i - 1], point, radius: 0.011, color: armColor) }

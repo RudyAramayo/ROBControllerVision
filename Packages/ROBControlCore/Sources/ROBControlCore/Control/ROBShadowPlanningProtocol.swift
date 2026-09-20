@@ -3,8 +3,10 @@ import Foundation
 // Kept byte-identical in ROBControllerVision/Packages/ROBControlCore. This
 // protocol has no execution, authority, driver-coordinate or motor messages.
 public enum ROBShadowAction: String, Codable, Sendable {
-    case start, align, clutch, pose, release, nudge, end
+    case start, align, clutch, pose, release, nudge, end, refresh
 }
+
+public enum ROBShadowArm: String, Codable, CaseIterable, Sendable { case left, right }
 
 public struct ROBShadowPose: Codable, Equatable, Sendable {
     public var position: [Double]
@@ -45,14 +47,18 @@ public struct ROBShadowCommand: Codable, Equatable, Sendable {
     public var tracking: ROBShadowTrackingSample?
     public var translationScale: Double?
     public var delta: [Double]?
+    public var arm: ROBShadowArm
+    public var visionRequired: Bool?
     public init(_ action: ROBShadowAction, shadowID: UUID, modelID: String? = nil,
                 tracking: ROBShadowTrackingSample? = nil, translationScale: Double? = nil,
-                delta: [Double]? = nil) {
+                delta: [Double]? = nil, arm: ROBShadowArm = .left, visionRequired: Bool? = nil) {
         self.action = action; self.shadowID = shadowID; self.requestID = UUID(); self.modelID = modelID
         self.tracking = tracking; self.translationScale = translationScale; self.delta = delta
+        self.arm = arm; self.visionRequired = action == .start ? (visionRequired ?? true) : visionRequired
     }
     public var isValid: Bool {
-        if action == .start { return modelID == nil && tracking == nil && translationScale == nil && delta == nil }
+        if action == .start { return modelID == nil && tracking == nil && translationScale == nil && delta == nil && visionRequired != nil }
+        guard visionRequired == nil else { return false }
         if action == .end && modelID == nil {
             return tracking == nil && translationScale == nil && delta == nil
         }
@@ -113,10 +119,19 @@ public struct ROBShadowResponse: Codable, Equatable, Sendable {
     public var hardwareOutputEnabled = false
     public var referenceSource = "approved_scan_estimate"
     public var collisionStatus = "not_checked"
+    public var arm: ROBShadowArm = .left
+    public var visionRequired = true
+    public var visionStatus = "unavailable"
+    public var visionDetail = "No live observation"
+    public var visualAgeMilliseconds: Double?
+    public var observedFrames: [ROBShadowFrame] = []
+    public var clearanceMeters: Double?
+    public var collisionPair: [String]?
+    public var collisionDetail = "Clearance unavailable"
     public var frame = "base_link"
     public var referenceFrames: [ROBShadowFrame] = []
     public var ghostFrames: [ROBShadowFrame] = []
-    public var positions: [Double] = [] // left R-11 MODEL radians, never vendor coordinates
+    public var positions: [Double] = [] // selected arm MODEL radians, never vendor coordinates
     public var target: ROBShadowPose?
     public var positionErrorMeters: Double?
     public var orientationErrorRadians: Double?
@@ -125,22 +140,29 @@ public struct ROBShadowResponse: Codable, Equatable, Sendable {
         case protocolName = "protocol", kind, controllerID, sessionID, sequence, shadowID, requestID,
              modelID, referenceID, status, detail, hardwareOutputEnabled, referenceSource,
              collisionStatus, frame, referenceFrames, ghostFrames, positions, target,
-             positionErrorMeters, orientationErrorRadians, solveMilliseconds
+             positionErrorMeters, orientationErrorRadians, solveMilliseconds, arm, visionRequired,
+             visionStatus, visionDetail, visualAgeMilliseconds, observedFrames, clearanceMeters, collisionPair, collisionDetail
     }
     public init(request: ROBShadowRequest, status: String, detail: String) {
         controllerID = request.controllerID; sessionID = request.sessionID; sequence = request.sequence
         shadowID = request.command.shadowID; requestID = request.command.requestID; modelID = request.command.modelID ?? ""
         referenceID = ""; self.status = status; self.detail = detail
+        arm = request.command.arm
     }
     public var isValid: Bool {
         protocolName == ROBShadowProtocol.name && kind == "response" && sequence > 0
             && !hardwareOutputEnabled && referenceSource == "approved_scan_estimate"
-            && collisionStatus == "not_checked" && frame == "base_link"
+            && ["not_checked", "clear_model", "blocked"].contains(collisionStatus) && frame == "base_link"
+            && ["unavailable", "partial", "confirmed", "stale"].contains(visionStatus)
+            && visionDetail.count <= 600 && collisionDetail.count <= 600
+            && (visualAgeMilliseconds == nil || (visualAgeMilliseconds!.isFinite && visualAgeMilliseconds! >= 0))
+            && (clearanceMeters == nil || clearanceMeters!.isFinite)
+            && (collisionPair == nil || (collisionPair!.count == 2 && collisionPair!.allSatisfy { !$0.isEmpty && $0.count < 80 }))
             && ["ready", "aligned", "clutched", "solved", "paused", "blocked", "unavailable", "ended"].contains(status)
             && detail.count <= 1000 && (modelID.isEmpty || modelID.count == 64)
             && (referenceID.isEmpty || referenceID.count == 64)
-            && referenceFrames.count <= 50 && ghostFrames.count <= 50
-            && [referenceFrames, ghostFrames].allSatisfy { frames in
+            && referenceFrames.count <= 50 && ghostFrames.count <= 50 && observedFrames.count <= 50
+            && [referenceFrames, ghostFrames, observedFrames].allSatisfy { frames in
                 Set(frames.map(\.name)).count == frames.count
                     && frames.allSatisfy { !$0.name.isEmpty && $0.name.count < 80 && $0.pose.isValid }
             }
@@ -152,8 +174,8 @@ public struct ROBShadowResponse: Codable, Equatable, Sendable {
 }
 
 public enum ROBShadowProtocol {
-    public static let name = "rob-shadow-ik/1"
-    public static let maximumBytes = 32_768
+    public static let name = "rob-shadow-ik/2"
+    public static let maximumBytes = 65_536
     public static func now() -> UInt64 { UInt64(max(0, Date().timeIntervalSince1970 * 1000)) }
     public static func fresh(_ request: ROBShadowRequest, now: UInt64 = now()) -> Bool {
         Double(now) - Double(request.sentAtMilliseconds) <= 500

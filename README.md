@@ -201,4 +201,4 @@ The repository is self-contained and has no source-path dependency on sibling `R
 
 ## Shadow IK development preview
 
-The control deck now includes a [Mac Drake shadow IK preview](docs/shadow-ik.md) for the left R-11 gripper. It supports tracked controller clutching and small XYZ steps, with no actuator output. Live visual state estimation and clearance commissioning remain pending.
+The control deck now includes a [Mac Drake shadow IK preview](docs/shadow-ik.md) for both R-11 and L-10 grippers. Independent controller clutching and XYZ steps remain virtual. Markerless OAK-D arm estimation and swept rigid-scan clearance now feed the preview; live camera validation and the reported torso/upper-arm envelope conflicts still need calibration.

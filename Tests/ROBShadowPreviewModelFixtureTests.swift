@@ -55,13 +55,39 @@ import Foundation
         let count = commands.count
         model.grip(true, connected: true); model.tracking(sample(4)); model.poll()
         try await Task.sleep(for: .milliseconds(20))
-        try expect(commands.count == count, "Held grip automatically resumed after a gap")
+        try expect(!commands.dropFirst(count).contains(where: { $0.action == .pose || $0.action == .clutch }), "Held grip automatically resumed after a gap")
+        if commands.last?.action == .refresh {
+            var refresh = reference; refresh.requestID = commands.last!.requestID
+            model.consume(refresh)
+        }
+        model.selectedArm = .right
+        let rightSample = ROBShadowTrackingSample(trackingID: UUID(), sampleID: 1, ageMilliseconds: 0,
+            quality: "tracked", pose: .init(position: [0.2, 1, -0.5], quaternion: [0, 0, 0, 1]))
+        model.tracking(rightSample, arm: .right); model.poll(); model.alignForward()
+        try await Task.sleep(for: .milliseconds(20))
+        try expect(commands.last?.arm == .right && commands.last?.action == .align, "Right controller did not align its own arm")
+        var rightAligned = reference; rightAligned.arm = .right; rightAligned.requestID = commands.last!.requestID; rightAligned.status = "aligned"
+        model.consume(rightAligned)
+        model.grip(false, connected: true, arm: .right); model.poll()
+        var nextRight = rightSample; nextRight.sampleID = 2
+        model.grip(true, connected: true, arm: .right); model.tracking(nextRight, arm: .right); model.poll()
+        try await Task.sleep(for: .milliseconds(20))
+        try expect(commands.last?.arm == .right && commands.last?.action == .clutch, "Right grip did not use right arm")
+        var wrongArm = reference; wrongArm.requestID = commands.last!.requestID; wrongArm.status = "clutched"
+        model.consume(wrongArm)
+        try expect(model.waiting, "Wrong-arm response acknowledged the right controller")
+        model.suspend()
+        try await Task.sleep(for: .milliseconds(20))
+        try expect(commands.last?.action == .end, "Authority suspension did not end both input lanes")
+        var ended = reference; ended.arm = .right; ended.requestID = commands.last!.requestID; ended.status = "ended"
+        model.consume(ended)
+        try expect(model.response == nil, "End acknowledgement revived a suspended preview")
         model.close()
         try await Task.sleep(for: .milliseconds(20))
         try expect(commands.last?.action == .end && !model.visible, "Closing failed to end session")
         model.open(); model.start(); model.close()
         try await Task.sleep(for: .milliseconds(20))
         try expect(commands.last?.action == .end && commands.last?.modelID == nil, "Closing during startup leaked the Mac worker")
-        print("Shadow preview model passed: reference handshake, tracked alignment, clutch/release, late result, input gap, startup cancellation")
+        print("Shadow preview model passed: both controllers, wrong-arm/late reply rejection, grip loss, authority suspension, startup cancellation")
     }
 }

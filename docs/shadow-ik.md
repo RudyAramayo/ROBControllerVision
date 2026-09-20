@@ -1,39 +1,47 @@
 # Mac shadow IK preview
 
-The control deck's **Shadow IK** button opens a three-dimensional kinematic preview
-of ROB-left / R-11. Connect to the updated Cerebro with drive and arm authorities
-disarmed. Choose **Load scan reference**, point the left controller forward and
-choose **Align controller forward**. Release, then hold the left grip to move the
-ghost gripper. Release to hold and reposition your hand. Wrist rotation requests
-tool orientation; precision scales translation by 0.2 on each new clutch. XYZ
-buttons provide 2 mm or 10 mm steps without a tracked controller.
+Shadow IK now supports **both controllers**: left grip → ROB-left **R-11**, right
+grip → ROB-right **L-10**. It also displays Mac markerless depth observations and
+swept rigid-scan clearance. All output stays virtual; no actuator authority or
+motor command is acquired or generated.
 
-Grey is the approved **scan estimate**, cyan is the Mac IK result, and orange is the
-requested target. This milestone renders a kinematic proxy, not an articulated
-photorealistic scan. The base, torso, neck and right arm remain fixed. No motion
-authority is acquired and no motor target, gripper command or physical gesture is
-produced by this protocol. Trigger-based virtual grasping and recording are not
-implemented in this first milestone.
+Build both updated apps, run Cerebro's `Scripts/setup-shadow-planner.sh`, pair the
+headset with Cerebro, and open **Shadow IK** with drive and arms disarmed. Leave
+**Require live vision** on for camera-referenced preview. Select each arm in turn,
+point its controller approximately level in the desired ROB-forward direction,
+and choose **Align controller forward**. Release, then hold each matching grip.
+Both hands can operate together, with independent origins and release latches.
+Release a grip to reposition that hand. Precision scales translation by 0.2; XYZ
+buttons move the selected arm by 2 mm or 10 mm. Base, torso and neck stay held.
 
-The updated Cerebro needs its isolated Drake runtime. Run its
-`Scripts/setup-shadow-planner.sh` on the Mac before using the preview. An old Cerebro
-build or missing runtime is reported as an unavailable/timed-out preview, with no
-fallback to physical arm control. The separate simulator endpoint does not pretend
-to provide Mac Drake; use a real paired Mac for interactive shadow IK.
+Grey is the scan reference, cyan the IK ghost, green freshly observed arm geometry,
+and orange the target. Vision and clearance status appear below the model. The
+view remains a kinematic proxy, not a photorealistic articulated mesh. A displayed
+model target residual is not a measurement of physical accuracy.
 
-`ROBShadowPlanningProtocol.swift` in ROBControlCore is byte-identical to Cerebro's
-copy. `CerebroRobotTransport` carries it over the existing authenticated QUIC
-connection. Session, preview, request and sequence identities isolate replies.
-ARKit source age, tracking quality and origin identity travel with each controller
-pose. `ROBShadowClutchGate` requires an actual grip release after tracking or input
-loss. `ROBShadowPreviewModel` drops late replies and sends a terminating message
-even when the sheet closes during worker startup. Scene loss releases the preview.
+Live mode needs fresh, observable markerless depth fits for **both** arms. It does
+not require printed markers. Missing/occluded/ambiguous joints, stale depth and
+unregistered cameras hold the preview. A corrected physical pose rebases the ghost
+and requires release/re-clutch. Camera registration needs visible base and torso
+surfaces; a camera that only sees the surroundings or grippers cannot supply that
+registration. A suitable external RGB-D view may be needed. This has not yet been
+validated against live ROB camera data.
 
-This alignment defines virtual ROB axes; it is not real-world camera registration.
-There is no live visual joint estimator or collision/cable certification in this
-milestone. Both the protocol and UI say that the seed is a scan estimate and that
-clearance is unverified. The ±120° bounds are provisional model limits. R-11 is the
-only active chain; the right J2 reference exceeds +120° and remains untouched.
+To choose scan-only rehearsal, close/reopen the sheet and turn Require live vision
+off before loading. Collision and centered travel checks still apply. The current
+scan envelopes overlap at the torso and upper arms and **block movement pending
+geometry review**. Right J2's scan estimate is +120.417° and also needs an in-range
+visual correction before right-arm motion. Neither issue is silently bypassed.
+The rigid model check does not certify cable travel, payloads or surroundings.
+
+`rob-shadow-ik/2` is carried over the existing authenticated Cerebro transport. It
+adds an explicit arm, independent tracked input lanes, read-only observation refresh,
+and separate observed versus proposed frames. Old protocol versions cannot fall
+through into physical-control parsing. The protocol source remains byte-identical
+to Cerebro's copy. Late/wrong-arm replies are ignored. Tracking loss requires a real
+grip release; origin changes require re-alignment. Scene suspension or live control
+authority ends the preview. An old Mac build or missing runtime produces an explicit
+unavailable/timeout state without a physical-control fallback.
 
 Run:
 
@@ -45,8 +53,9 @@ xcodebuild -project ROBControllerVision.xcodeproj -scheme ROBControllerVision \
   CODE_SIGNING_ALLOWED=NO build
 ```
 
-For a DEBUG-only visual smoke test, place an actual Mac `rob-shadow-ik/1` response
-in the simulator app's Documents directory as `shadow-preview-replay.json` and
-launch with `--shadow-preview-smoke-test`. This is explicitly labelled recorded
-replay and does not connect to a robot. Physical controller/headset validation still
-requires a reachable Vision Pro and the updated Mac app.
+For a DEBUG simulator smoke test, place an actual Mac `rob-shadow-ik/2` response in
+Documents as `shadow-preview-replay.json` and launch with
+`--shadow-preview-smoke-test`. It is labelled a recorded replay and never connects
+to ROB. Live camera and physical controller verification still require the updated
+Mac app and a reachable headset. These changes are development builds, not a store
+or production companion release.
