@@ -78,6 +78,7 @@ final class GameControllerInput: NSObject {
     private(set) var poseTrackingStatus = "Spatial pose tracking has not started"
     private(set) var lastEventDescription = "Hold both VR grip buttons to enable control"
 
+    @ObservationIgnored var onShadowTracking: ((ROBShadowTrackingSample?) -> Void)?
     @ObservationIgnored var onSample: ((GameControllerSample) -> Void)?
     @ObservationIgnored var onBubbleButtons: ((Bool, Bool) -> Void)?
     @ObservationIgnored private var controllers: [ObjectIdentifier: GCController] = [:]
@@ -392,6 +393,9 @@ final class GameControllerInput: NSObject {
             tracker.onSideIdentified = { [weak self] id, chirality in
                 self?.setSide(chirality, for: id)
             }
+            tracker.onShadowPose = { [weak self] chirality, sample in
+                if chirality == .left { self?.onShadowTracking?(sample) }
+            }
             tracker.onPose = { [weak self] chirality, pose in
                 self?.applyTrackedPose(pose, chirality: chirality)
             }
@@ -484,6 +488,7 @@ private final class ControllerPoseTracker {
     }
 
     var onPose: ((Accessory.Chirality, ControllerPose?) -> Void)?
+    var onShadowPose: ((Accessory.Chirality, ROBShadowTrackingSample?) -> Void)?
     var onSideIdentified: ((ObjectIdentifier, Accessory.Chirality) -> Void)?
     var onStatus: ((String) -> Void)?
 
@@ -517,6 +522,8 @@ private final class ControllerPoseTracker {
                 self.session = session
                 try await session.run([provider])
                 self.onStatus?("Spatial controller poses are streaming")
+                var trackingIDs: [UUID: UUID] = [:]
+                var sampleID: UInt64 = 0
                 for await update in provider.anchorUpdates {
                     guard !Task.isCancelled else { return }
                     let anchor = update.anchor
@@ -526,6 +533,7 @@ private final class ControllerPoseTracker {
                             || anchor.trackingState == .positionOrientationTrackedLowAccuracy
                     else {
                         self.onPose?(chirality, nil)
+                        self.onShadowPose?(chirality, nil)
                         continue
                     }
                     let transform = anchor.originFromAnchorTransform
@@ -542,12 +550,26 @@ private final class ControllerPoseTracker {
                         timestamp: Date().timeIntervalSince1970
                     )
                     self.onPose?(chirality, pose)
+                    // Anchor timestamps, not repeated button polls, determine
+                    // observation age. Low-accuracy samples retain their quality.
+                    sampleID &+= 1
+                    if trackingIDs[anchor.id] == nil { trackingIDs[anchor.id] = UUID() }
+                    let sourceAge = (ProcessInfo.processInfo.systemUptime - anchor.timestamp) * 1000
+                    if let pose, sourceAge.isFinite, sourceAge >= -10, sourceAge <= 60_000 {
+                        self.onShadowPose?(chirality, ROBShadowTrackingSample(
+                            trackingID: trackingIDs[anchor.id]!, sampleID: sampleID,
+                            ageMilliseconds: max(0, sourceAge),
+                            quality: anchor.trackingState == .positionOrientationTracked ? "tracked" : "low_accuracy",
+                            pose: ROBShadowPose(position: [Double(pose.x), Double(pose.y), Double(pose.z)],
+                                quaternion: [Double(pose.qx), Double(pose.qy), Double(pose.qz), Double(pose.qw)])))
+                    } else { self.onShadowPose?(chirality, nil) }
                 }
             } catch {
                 // Input and tread control remain usable when spatial tracking is unavailable or
                 // denied. No stale pose is emitted as a valid arm target.
                 for chirality in [Accessory.Chirality.left, .right] {
                     self.onPose?(chirality, nil)
+                    self.onShadowPose?(chirality, nil)
                 }
                 self.onStatus?("Spatial tracking unavailable: \(error.localizedDescription)")
             }
@@ -555,6 +577,8 @@ private final class ControllerPoseTracker {
     }
 
     func stop() {
+        onShadowPose?(.left, nil)
+        onShadowPose?(.right, nil)
         trackingTask?.cancel()
         trackingTask = nil
         session?.stop()

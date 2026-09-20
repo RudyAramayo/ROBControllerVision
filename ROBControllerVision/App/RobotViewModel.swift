@@ -56,6 +56,20 @@ final class RobotViewModel {
     var operatorTextDraft = ""
     var operatorTextMode: OperatorTextMode = .command
     var showsArmControlSheet = false
+    var showsShadowPreview = false
+    let shadowPreview = ROBShadowPreviewModel()
+    @ObservationIgnored private var shadowTask: Task<Void, Never>?
+    var canOpenShadowPreview: Bool {
+        snapshot.connection.isReady && connectionDestination == .cerebro
+            && !snapshot.safety.isArmed && !hasAnyActiveArmControl
+    }
+    func openShadowPreview() {
+        guard canOpenShadowPreview else { return }
+        speechInput.stop()
+        clearGripperInputTracking()
+        headOrientation.setDeadManHeld(false)
+        showsShadowPreview = true
+    }
     var showsBubbleControlSheet = false
     let bubbleConsole = ROBBubbleConsoleModel()
     @ObservationIgnored private var bubbleTransport: CerebroRobotTransport?
@@ -202,10 +216,19 @@ final class RobotViewModel {
                 self.sendOperatorText(as: self.operatorTextMode)
             }
         }
+        self.gameController.onShadowTracking = { [weak self] sample in
+            guard let self, self.sceneIsActive, !self.snapshot.safety.emergencyStopIsLatched else { return }
+            self.shadowPreview.tracking(sample)
+        }
+        self.shadowPreview.send = { [weak self] command in
+            guard let transport = self?.bubbleTransport else { throw RobotTransportError.notConnected }
+            try await transport.sendShadow(command)
+        }
         self.gameController.onSample = { [weak self] sample in
             self?.acceptGameController(sample)
         }
         self.gameController.onBubbleButtons = { [weak self] spin, blower in
+            guard self?.showsShadowPreview != true else { return }
             self?.bubbleConsole.controllerButtons(spin: spin, blower: blower)
         }
         self.bubbleConsole.send = { [weak self] command in
@@ -276,6 +299,7 @@ final class RobotViewModel {
     }
 
     func stop() {
+        shadowPreview.close(); shadowTask?.cancel()
         updatesTask?.cancel()
         updatesTask = nil
         actionID = nil
@@ -423,6 +447,14 @@ final class RobotViewModel {
             pairedCredential = credential
             let transport = CerebroRobotTransport(credential: credential)
             bubbleTransport = transport
+            shadowTask?.cancel()
+            shadowTask = Task { [weak self] in
+                let stream = await transport.shadowEvents()
+                for await response in stream {
+                    guard !Task.isCancelled else { return }
+                    self?.shadowPreview.consume(response)
+                }
+            }
             bubbleTask?.cancel()
             bubbleTask = Task { [weak self] in
                 let stream = await transport.bubbleEvents()
@@ -449,6 +481,7 @@ final class RobotViewModel {
 
     func connectToSimulator() {
         bubbleConsole.command(.stop)
+        shadowPreview.close(); shadowTask?.cancel(); shadowPreview.disconnected()
         bubbleTask?.cancel(); bubbleTransport = nil; bubbleConsole.disconnected()
         guard actionTask == nil else { return }
         statusMessage = "Connecting to ROB Simulator…"
@@ -465,6 +498,7 @@ final class RobotViewModel {
 
     func disconnect() {
         bubbleConsole.command(.stop)
+        shadowPreview.close(); shadowTask?.cancel(); shadowPreview.disconnected()
         bubbleTask?.cancel(); bubbleTransport = nil; bubbleConsole.disconnected()
         endVirtualMotion()
         cancelArmMotionLocally()
@@ -1469,7 +1503,7 @@ final class RobotViewModel {
     #endif
 
     func beginVirtualMotion(linear: Float, angular: Float) {
-        guard activeControlDomain == .drive,
+        guard !showsShadowPreview, activeControlDomain == .drive,
             sceneIsActive,
             snapshot.connection.isReady,
             snapshot.safety.isArmed,
@@ -1521,6 +1555,7 @@ final class RobotViewModel {
         }
         let activeVideoIDs = snapshot.videoStreams.map(\.id)
         if !active {
+            shadowPreview.suspend()
             clearPairingCodeDraft()
             cancelVideoAction()
             endVirtualMotion()
@@ -1553,6 +1588,14 @@ final class RobotViewModel {
         guard sceneIsActive else { return }
         latestGameControllerSample = sample
         latestGameControllerSampleAtUptime = ProcessInfo.processInfo.systemUptime
+        if showsShadowPreview {
+            guard !snapshot.safety.emergencyStopIsLatched, !snapshot.safety.isArmed, !hasAnyActiveArmControl else {
+                shadowPreview.suspend(); return
+            }
+            shadowPreview.grip(sample.leftSpatialGripIsHeld, connected: sample.leftSpatialControllerIsConnected)
+            headOrientation.setDeadManHeld(false)
+            return
+        }
         synchronizePairedControllerArmInput(from: sample)
         submitGripperTriggerEdges(from: sample)
         if activeControlDomain == .amberArm {
@@ -1782,13 +1825,13 @@ final class RobotViewModel {
 
     private func acceptHeadOrientation(_ sample: HeadOrientationSample) {
         latestHeadOrientation = sample
-        guard sceneIsActive, latestGameControllerSample.isConnected,
+        guard !showsShadowPreview, sceneIsActive, latestGameControllerSample.isConnected,
               latestGameControllerSample.deadManIsHeld else { return }
         sendCombinedControllerSample()
     }
 
     private func sendCombinedControllerSample() {
-        guard activeControlDomain == .drive else { return }
+        guard !showsShadowPreview, activeControlDomain == .drive else { return }
         let sample = latestGameControllerSample
         inputSequence &+= 1
         // The two controller sticks are direct tread demands. Convert to the protocol's
@@ -1813,6 +1856,10 @@ final class RobotViewModel {
     }
 
     private func refreshStatusMessage(from snapshot: RobotSessionSnapshot) {
+        if !snapshot.connection.isReady { shadowPreview.disconnected() }
+        if showsShadowPreview && (snapshot.safety.isArmed || hasAnyActiveArmControl || snapshot.safety.emergencyStopIsLatched) {
+            shadowPreview.suspend()
+        }
         if snapshot.connection.phase == .failed
             || snapshot.connection.phase == .disconnected
             || !snapshot.safety.isArmed

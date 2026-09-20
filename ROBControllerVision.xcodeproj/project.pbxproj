@@ -27,6 +27,8 @@
 		B00000000000000000000010 /* HeadOrientationInput.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0000000000000000000000F /* HeadOrientationInput.swift */; };
 		B00000000000000000000013 /* ArmControlPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = F00000000000000000000012 /* ArmControlPanel.swift */; };
 		3A9B51BEC3532CD54DD2F584 /* ROBBubbleConsole.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB16393B9ECA065405A6CEF0 /* ROBBubbleConsole.swift */; };
+		F90AC3C8D1CD2AD194009A85 /* ROBShadowPreviewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDFA9CF3F03BD9807BCBF09E /* ROBShadowPreviewModel.swift */; };
+		745B544B09BA68C811F8B908 /* ROBShadowPreviewPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A04A4A1DE7629E41B3CE6BDB /* ROBShadowPreviewPanel.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -49,6 +51,8 @@
 		F0000000000000000000000F /* HeadOrientationInput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeadOrientationInput.swift; sourceTree = "<group>"; };
 		F00000000000000000000012 /* ArmControlPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArmControlPanel.swift; sourceTree = "<group>"; };
 		BB16393B9ECA065405A6CEF0 /* ROBBubbleConsole.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ROBBubbleConsole.swift; sourceTree = "<group>"; };
+		DDFA9CF3F03BD9807BCBF09E /* ROBShadowPreviewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ROBShadowPreviewModel.swift"; sourceTree = "<group>"; };
+		A04A4A1DE7629E41B3CE6BDB /* ROBShadowPreviewPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ROBShadowPreviewPanel.swift"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -126,6 +130,8 @@
 			isa = PBXGroup;
 			children = (
 				F00000000000000000000012 /* ArmControlPanel.swift */,
+				A04A4A1DE7629E41B3CE6BDB /* ROBShadowPreviewPanel.swift */,
+				DDFA9CF3F03BD9807BCBF09E /* ROBShadowPreviewModel.swift */,
 				BB16393B9ECA065405A6CEF0 /* ROBBubbleConsole.swift */,
 				F00000000000000000000006 /* ControlPanel.swift */,
 				F00000000000000000000011 /* OperatorSpeechPanel.swift */,
@@ -263,6 +269,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				745B544B09BA68C811F8B908 /* ROBShadowPreviewPanel.swift in Sources */,
+				F90AC3C8D1CD2AD194009A85 /* ROBShadowPreviewModel.swift in Sources */,
 				B00000000000000000000001 /* ROBControllerVisionApp.swift in Sources */,
 				B00000000000000000000002 /* ContentView.swift in Sources */,
 				B00000000000000000000003 /* RobotViewModel.swift in Sources */,

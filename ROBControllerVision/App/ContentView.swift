@@ -41,7 +41,16 @@ struct ContentView: View {
         .onAppear {
             receivesControllerEvents = true
         }
+        .sheet(isPresented: $model.showsShadowPreview) {
+            ROBShadowPreviewPanel(model: model.shadowPreview)
+                .toolbar { Button("Close") { model.showsShadowPreview = false } }
+        }
         .toolbar {
+            Button { model.openShadowPreview() } label: {
+                Label("Shadow IK", systemImage: "cube.transparent")
+            }
+            .disabled(!model.canOpenShadowPreview)
+            .help("Connect to Cerebro with drive and arm controls disarmed")
             Button { model.showsBubbleControlSheet = true } label: {
                 Label("Bubbles", systemImage: "bubbles.and.sparkles")
             }
@@ -55,6 +64,11 @@ struct ContentView: View {
         }
         #if DEBUG
             .task {
+                if ProcessInfo.processInfo.arguments.contains("--shadow-preview-smoke-test") {
+                    model.showsShadowPreview = true
+                    try? await ContinuousClock().sleep(for: .milliseconds(300))
+                    model.shadowPreview.loadSimulatorReplay()
+                }
                 if ProcessInfo.processInfo.arguments.contains("--immersive-smoke-test") {
                     try? await ContinuousClock().sleep(for: .seconds(1))
                     _ = await openImmersiveSpace(id: "insta360-immersive")

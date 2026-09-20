@@ -31,6 +31,27 @@ public actor CerebroRobotTransport: RobotTransport, RobotVideoDataTransport {
     private var videoReconnectAttempt = 0
     private var activeVideoStreams: Set<VideoSubscriptionID> = []
     private var eventSubscribers: [UUID: AsyncStream<RobotEvent>.Continuation] = [:]
+    private var shadowSubscriber: AsyncStream<ROBShadowResponse>.Continuation?
+    private var shadowSequence: UInt64 = 0
+    private var lastShadowResponseSequence: UInt64 = 0
+
+    public func shadowEvents() -> AsyncStream<ROBShadowResponse> {
+        shadowSubscriber?.finish()
+        let pair = AsyncStream<ROBShadowResponse>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        shadowSubscriber = pair.continuation
+        return pair.stream
+    }
+
+    public func sendShadow(_ command: ROBShadowCommand) async throws {
+        guard command.isValid, let sessionID = activeSessionID,
+              await controlClient.liveSessionID() == sessionID,
+              activeSessionID == sessionID else { throw RobotTransportError.notConnected }
+        shadowSequence &+= 1
+        let request = ROBShadowRequest(controllerID: credential.controllerID, sessionID: sessionID,
+                                       sequence: shadowSequence, command: command)
+        try await controlClient.sendApplicationData(ROBShadowProtocol.encode(request))
+    }
+
     private var bubbleSubscriber: AsyncStream<ROBBubbleStatus>.Continuation?
     private var bubbleSequence: UInt64 = 0
     private var lastBubbleStatusSequence: UInt64 = 0
@@ -129,6 +150,7 @@ public actor CerebroRobotTransport: RobotTransport, RobotVideoDataTransport {
             try ensureCurrentConnectionAttempt(attemptID)
 
             activeSessionID = sessionID
+            shadowSequence = 0; lastShadowResponseSequence = 0
             lastBubbleStatusSequence = 0
             bubbleSequence = 0
             lastCommandSequence = 0
@@ -575,6 +597,16 @@ public actor CerebroRobotTransport: RobotTransport, RobotVideoDataTransport {
             publish(.disconnected(reason: error?.localizedDescription ?? "Cerebro disconnected."))
 
         case .applicationData(let data):
+            if ROBShadowProtocol.claims(data) {
+                guard let response = try? ROBShadowProtocol.response(data),
+                      response.controllerID == credential.controllerID,
+                      response.sessionID == activeSessionID,
+                      response.sequence > lastShadowResponseSequence,
+                      response.sequence <= shadowSequence else { return }
+                lastShadowResponseSequence = response.sequence
+                shadowSubscriber?.yield(response)
+                return
+            }
             if ROBBubbleProtocol.claims(data) {
                 guard let message = try? ROBBubbleProtocol.decode(data),
                       message.command.operation == .status,

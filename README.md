@@ -198,3 +198,7 @@ If pinned TLS or reciprocal authentication fails immediately after the Cerebro c
 ## Repository boundary
 
 The repository is self-contained and has no source-path dependency on sibling `ROBController` or `Cerebro` checkouts. `ROBCerebroTransport` keeps Cerebro's wire framing, pairing material, and established keyed-archive controller compatibility private behind `RobotTransport`; those legacy shapes do not leak into the `ROBControlCore` domain model.
+
+## Shadow IK development preview
+
+The control deck now includes a [Mac Drake shadow IK preview](docs/shadow-ik.md) for the left R-11 gripper. It supports tracked controller clutching and small XYZ steps, with no actuator output. Live visual state estimation and clearance commissioning remain pending.

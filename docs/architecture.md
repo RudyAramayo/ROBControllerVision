@@ -215,3 +215,7 @@ The pipeline forces a keyframe on start and recovery and stops on consumer cance
 - Cerebro permits one active stream per authenticated media connection and up
   to three such connections for one controller, isolating camera backpressure.
 - The control application payload remains a private compatibility translation until all robot applications share a typed replacement. The `ROBControlCore` domain contract is not changed to match that legacy representation.
+
+## Shadow planning lane
+
+`rob-shadow-ik/1` is a separate authenticated preview channel from `CerebroRobotTransport` to the Mac Drake worker. The [Shadow IK panel](shadow-ik.md) consumes controller poses while physical input paths are inhibited and displays reference versus proposed FK frames. It does not use `RobotCommand.armTarget`, arm authority or the Amber gateway.
