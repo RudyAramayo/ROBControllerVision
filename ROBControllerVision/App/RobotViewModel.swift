@@ -654,9 +654,9 @@ final class RobotViewModel {
             do {
                 try await session.respondToPendingRobotAction(state, detail: detail)
                 if state == .accepted,
-                   action == .playGesture || action == .runStartupTest {
+                   action == .playGesture || action == .runStartupTest || action == .armOperation {
                     self?.robotActionStatusMessage =
-                        "Approved — Cerebro owns execution and measured completion"
+                        "Approved — Cerebro executes and reports the hardware outcome"
                 } else if state == .accepted {
                     self?.robotActionStatusMessage =
                         "Approved — supervise the action, then report completion or failure"

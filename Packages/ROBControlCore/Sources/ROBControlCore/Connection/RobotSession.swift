@@ -458,10 +458,10 @@ public actor RobotSession {
         if requestedState == .accepted, !snapshot.robotActions.isEnabled {
             throw RobotTransportError.invalidState("Action approvals are disabled.")
         }
-        if request.action == .playGesture,
+        if request.action == .playGesture || request.action == .runStartupTest || request.action == .armOperation,
            requestedState == .completed || requestedState == .failed {
             throw RobotTransportError.invalidState(
-                "Cerebro owns measured completion for an approved Amber gesture."
+                "Cerebro owns execution and reports the hardware outcome for this operation."
             )
         }
 

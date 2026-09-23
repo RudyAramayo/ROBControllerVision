@@ -61,6 +61,23 @@ struct RobotActionProtocolTests {
         #expect(response.state == .accepted)
     }
 
+    @Test("Headless arm approval carries one immutable bounded operation")
+    func armOperationRoundTrip() throws {
+        let args: [String: RobotActionJSONValue] = ["operation": .string("relax"), "arm": .string("both"),
+            "summary": .string("Lower gently to hanging then deactivate")]
+        let request = try RobotActionMessage(kind: .actionRequest, callID: "arm-request", senderID: "Cerebro.arm-operations",
+            recipientID: controllerID, sentAtMilliseconds: now, expiresAtMilliseconds: now + 30_000,
+            action: .armOperation, arguments: args, state: .pending)
+        #expect(try RobotActionWireCodec.decodeArchive(RobotActionWireCodec.archive(request)) == request)
+        for extra in [["force": RobotActionJSONValue.number(1000)], ["operation": .string("arbitrary")], ["arm": .string("unknown")]] {
+            #expect(throws: (any Error).self) {
+                try RobotActionMessage(kind: .actionRequest, callID: "bad-arm-request", senderID: cerebroID,
+                    sentAtMilliseconds: now, expiresAtMilliseconds: now + 30_000, action: .armOperation,
+                    arguments: args.merging(extra) { _, replacement in replacement }, state: .pending)
+            }
+        }
+    }
+
     @Test("Model-supplied joint arrays and unknown action arguments fail closed")
     func strictActionArguments() throws {
         let unsafe = """

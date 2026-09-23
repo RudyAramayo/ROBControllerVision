@@ -7,15 +7,15 @@ import Testing
 struct RobotSessionActionApprovalTests {
     private let controllerID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 
-    @Test("Operator acceptance remains pending until Cerebro reports measured completion")
-    func acceptedGestureLifecycle() async throws {
+    @Test("Cerebro-owned approval waits for executor results", arguments: [RobotActionName.playGesture, .runStartupTest, .armOperation])
+    func acceptedGestureLifecycle(action: RobotActionName) async throws {
         let transport = RobotActionTestTransport()
         let session = RobotSession(configuration: .init(commandInterval: .seconds(10)))
         await session.configureRobotActionController(senderID: controllerID)
         await session.connect(using: transport)
         try await session.setRobotActionApprovalsEnabled(true)
 
-        let request = try makeGestureRequest()
+        let request = try makeGestureRequest(action: action)
         await transport.publish(.robotAction(request))
         try await waitUntil {
             await session.currentSnapshot().robotActions.pendingRequest?.callID
@@ -29,6 +29,13 @@ struct RobotSessionActionApprovalTests {
         )
         #expect(await transport.sentActionStates().contains(.accepted))
         #expect(await session.currentSnapshot().robotActions.pendingRequest != nil)
+
+        for state in [RobotActionState.completed, .failed] {
+            do {
+                try await session.respondToPendingRobotAction(state, detail: "Manual outcome")
+                Issue.record("Controller must not claim completion for a Cerebro-owned operation")
+            } catch { /* expected: approval is distinct from hardware completion */ }
+        }
 
         let executing = try RobotActionMessage(
             kind: .actionStatus,
@@ -97,7 +104,7 @@ struct RobotSessionActionApprovalTests {
         await session.disconnect()
     }
 
-    private func makeGestureRequest() throws -> RobotActionMessage {
+    private func makeGestureRequest(action: RobotActionName = .playGesture) throws -> RobotActionMessage {
         let now = RobotActionMessage.nowMilliseconds
         return try RobotActionMessage(
             kind: .actionRequest,
@@ -106,8 +113,10 @@ struct RobotSessionActionApprovalTests {
             recipientID: controllerID,
             sentAtMilliseconds: now,
             expiresAtMilliseconds: now + 30_000,
-            action: .playGesture,
-            arguments: ["gesture": .string("friendly_wave")],
+            action: action,
+            arguments: action == .armOperation
+                ? ["operation": .string("prepare"), "arm": .string("both"), "summary": .string("Bring arms forward and calibrate both empty grippers")]
+                : ["gesture": .string("friendly_wave")],
             state: .pending
         )
     }

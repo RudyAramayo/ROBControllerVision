@@ -7,6 +7,7 @@ public enum RobotActionName: String, Codable, CaseIterable, Hashable, Sendable {
     case navigateRelative = "navigate_relative"
     case stopMotion = "stop_motion"
     case runStartupTest = "run_startup_test"
+    case armOperation = "arm_operation"
 }
 
 public enum RobotActionMessageKind: String, Codable, Hashable, Sendable {
@@ -254,6 +255,14 @@ public struct RobotActionMessage: Codable, Hashable, Sendable, Identifiable {
                   (0 ... 0.35).contains(speed) else {
                 return "navigate_relative arguments exceed their bounds."
             }
+        case .armOperation:
+            guard Set(arguments.keys) == ["operation", "arm", "summary"],
+                  let operation = arguments["operation"]?.stringValue,
+                  ["activate", "position", "deactivate", "calibrate_gripper", "open_gripper", "close_gripper", "startup", "prepare", "grab", "hold", "relax", "gesture", "restart_stack", "manual"].contains(operation),
+                  let arm = arguments["arm"]?.stringValue, ["left", "right", "both"].contains(arm),
+                  let summary = arguments["summary"]?.stringValue,
+                  !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  summary.count <= 2048 else { return "Invalid arm operation approval." }
         case .stopMotion:
             guard arguments.isEmpty else { return "stop_motion takes no arguments." }
         }

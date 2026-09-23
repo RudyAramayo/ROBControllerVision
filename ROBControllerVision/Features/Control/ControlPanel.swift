@@ -293,7 +293,7 @@ private struct RobotActionApprovalView: View {
                         }
                         .buttonStyle(.borderedProminent)
 
-                        if request.action != .playGesture && request.action != .runStartupTest {
+                        if request.action != .playGesture && request.action != .runStartupTest && request.action != .armOperation {
                             HStack {
                                 Button("Confirm Completed", action: model.confirmPendingRobotActionCompleted)
                                     .buttonStyle(.borderedProminent)
@@ -302,7 +302,7 @@ private struct RobotActionApprovalView: View {
                                     .buttonStyle(.bordered)
                             }
                         } else {
-                            Text("Cerebro reports completion only after Amber acknowledgement and fresh measured settling.")
+                            Text("Cerebro reports the hardware outcome. Gripper acceptance alone does not verify jaw position, force or a secure grasp.")
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                         }
@@ -354,11 +354,13 @@ private struct RobotActionApprovalView: View {
         case .navigateRelative: "Navigate Relative"
         case .stopMotion: "Stop Motion"
         case .runStartupTest: "Run LIVE Startup Test"
+        case .armOperation: "Arm Operation"
         case nil: "Robot Action"
         }
     }
 
     private func summary(for request: RobotActionMessage) -> String {
+        if request.action == .armOperation, case .string(let text) = request.arguments["summary"] { return text }
         let fields = request.arguments.keys.sorted().map { key in
             "\(key): \(describe(request.arguments[key]))"
         }
